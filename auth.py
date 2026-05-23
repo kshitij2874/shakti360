@@ -1,23 +1,42 @@
-from fastapi import Header, HTTPException, Depends
-from firebase_admin import auth, credentials, initialize_app
-from firebase_admin._apps import _apps as firebase_apps
+"""auth.py — Firebase Auth middleware for ShaktiAgent."""
 import logging
+from fastapi import Header, HTTPException
+
+import firebase_admin
+from firebase_admin import auth, credentials
 
 logger = logging.getLogger("shakti.auth")
 
-# Initialize Firebase Admin (uses default service account on Cloud Run)
-if not firebase_apps:
+_initialized = False
+
+
+def _ensure_init():
+    """Lazy initialize Firebase Admin once."""
+    global _initialized
+    if _initialized:
+        return
     try:
-        initialize_app()
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app()
+        _initialized = True
+        logger.info("Firebase Admin initialized")
+    except ValueError:
+        _initialized = True
     except Exception as e:
-        logger.warning(f"Firebase Admin init: {e}")
+        logger.warning(f"Firebase Admin init failed: {e}")
+
 
 async def verify_token(authorization: str = Header(None)) -> dict:
     """Verify Firebase ID token, return decoded user info."""
+    _ensure_init()
+
     if not authorization:
         raise HTTPException(401, "Missing Authorization header")
-    
+
     token = authorization.replace("Bearer ", "").strip()
+    if not token:
+        raise HTTPException(401, "Empty token")
+
     try:
         decoded = auth.verify_id_token(token)
         return {
