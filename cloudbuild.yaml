@@ -11,7 +11,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '--all-tags', 'asia-south1-docker.pkg.dev/$PROJECT_ID/shakti-repo/shakti-agent']
 
-  - name: 'gcr.io/google.cloud-sdk/cloud-sdk'
+  - name: 'google/cloud-sdk:latest'
     entrypoint: 'gcloud'
     args:
       - 'run'
