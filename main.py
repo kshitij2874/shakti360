@@ -178,32 +178,38 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
         # Keep only last 50 per user
         _session_history[request.user_id] = _session_history[request.user_id][-50:]
 
-        # Persist session to Firestore for greeting/context recall
-        try:
-            from google.cloud import firestore as gcloud_firestore  # type: ignore
-            db = gcloud_firestore.Client()
-            db.collection("sessions").document(session_id).set({
-                "user_id": request.user_id,
-                "session_id": session_id,
-                "query": request.query,
-                "age_band": request.age_band,
-                "pillar": result.get("pillar", ""),
-                "citations": result.get("citations", []),
-                "created_at": gcloud_firestore.SERVER_TIMESTAMP,
-            }, merge=True)
-        except Exception as e:
-            logger.warning(f"Failed to persist session to Firestore: {e}")
+        # Only persist sessions + extract memories on final ANSWER turns,
+        # not on intermediate clarifying-question exchanges.
+        is_final_answer = result.get("type", "answer") == "answer"
 
-        # Async memory extraction (non-blocking)
-        asyncio.create_task(
-            extract_and_save_memories(
-                user_id=request.user_id,
-                conversation=[
-                    {"role": "user", "content": request.query},
-                    {"role": "assistant", "content": result.get("response", "")},
-                ],
+        # Persist session to Firestore for greeting/context recall
+        if is_final_answer:
+            try:
+                from google.cloud import firestore as gcloud_firestore  # type: ignore
+                db = gcloud_firestore.Client()
+                db.collection("sessions").document(session_id).set({
+                    "user_id": request.user_id,
+                    "session_id": session_id,
+                    "query": request.query,
+                    "age_band": request.age_band,
+                    "pillar": result.get("pillar", ""),
+                    "citations": result.get("citations", []),
+                    "created_at": gcloud_firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+            except Exception as e:
+                logger.warning(f"Failed to persist session to Firestore: {e}")
+
+        # Async memory extraction (non-blocking) — only on final answer
+        if is_final_answer:
+            asyncio.create_task(
+                extract_and_save_memories(
+                    user_id=request.user_id,
+                    conversation=[
+                        {"role": "user", "content": request.query},
+                        {"role": "assistant", "content": result.get("response", "")},
+                    ],
+                )
             )
-        )
 
         return JSONResponse(content=result)
 

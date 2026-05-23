@@ -281,23 +281,47 @@ function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
 }
 
 // ─── Chat Message ───
-function ChatMessage({ msg }) {
+function ChatMessage({ msg, isLatest, onQuickReply }) {
   const isUser = msg.role === 'user';
   const pillar = PILLAR_STYLES[msg.pillar] || {};
+  const isClarifying = !isUser && msg.type === 'clarifying_question';
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} fade-in`}>
       <div className={isUser ? 'kalpana-bubble-user' : 'kalpana-bubble-bot'}>
-        {!isUser && msg.pillar && (
+        {!isUser && isClarifying && (
+          <div className="kalpana-badge kalpana-badge-health mb-2" style={{background:'rgba(196, 181, 253, 0.18)', color:'#6d4ed4'}}>
+            🌸 Getting to know your situation
+            {typeof msg.question_index === 'number' && typeof msg.questions_total === 'number' && (
+              <span className="ml-1 opacity-70">· {msg.question_index + 1}/{msg.questions_total}</span>
+            )}
+          </div>
+        )}
+        {!isUser && !isClarifying && msg.pillar && (
           <div className={`kalpana-badge ${pillar.badge} mb-2`}>
             {pillar.icon} {pillar.label || msg.pillar}
           </div>
         )}
         <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
-        {!isUser && <CitationChips citations={msg.citations}/>}
+        {/* Quick reply pills for yes/no clarifying questions, only on the latest one */}
+        {!isUser && isClarifying && isLatest && msg.is_yes_no && onQuickReply && (
+          <div className="flex gap-2 mt-3 flex-wrap">
+            <button onClick={() => onQuickReply('Yes')} className="kalpana-btn-secondary text-xs py-1.5 px-3">Yes</button>
+            <button onClick={() => onQuickReply('No')} className="kalpana-btn-secondary text-xs py-1.5 px-3">No</button>
+            <button onClick={() => onQuickReply('Skip')} className="text-xs py-1.5 px-3 rounded-xl transition" style={{color:'var(--kalpana-text-soft)', background:'transparent', border:'1px dashed var(--kalpana-rose-100)'}}>Skip</button>
+          </div>
+        )}
+        {/* Skip button for open-ended clarifying questions */}
+        {!isUser && isClarifying && isLatest && !msg.is_yes_no && onQuickReply && (
+          <div className="flex gap-2 mt-3">
+            <button onClick={() => onQuickReply('Skip')} className="text-xs py-1.5 px-3 rounded-xl transition" style={{color:'var(--kalpana-text-soft)', background:'transparent', border:'1px dashed var(--kalpana-rose-100)'}}>Skip this</button>
+          </div>
+        )}
+        {!isUser && !isClarifying && <CitationChips citations={msg.citations}/>}
         {!isUser && msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
           <ApprovalCard tools={msg.tools_to_call} sessionId={msg.session_id} onApprove={msg.onApprove} onReject={msg.onReject}/>
         )}
-        {!isUser && msg.latency_ms && (
+        {!isUser && !isClarifying && msg.latency_ms && (
           <div className="text-[10px] mt-2" style={{color:'var(--kalpana-text-soft)'}}>{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
         )}
       </div>
@@ -641,14 +665,19 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     } catch(e) { console.error(e); }
   };
 
-  const sendMessage = async () => {
-    const q = input.trim();
+  // Track whether we're mid-clarifying-flow (controls UI hints)
+  const clarifyingActive = messages.length > 0 &&
+    messages[messages.length - 1]?.role === 'assistant' &&
+    messages[messages.length - 1]?.type === 'clarifying_question';
+
+  const submitValue = async (rawValue) => {
+    const q = (rawValue || '').toString().trim();
     if (!q || loading || !ageBand) return;
     setInput('');
     setShowGreeting(false);
     setMessages(prev => [...prev, { role:'user', content:q }]);
     setLoading(true);
-    setThinkingSteps([{ step:'classifying', detail:'Classifying intent...' }]);
+    setThinkingSteps([{ step:'classifying', detail:'Thinking...' }]);
 
     try {
       const res = await fetch(`${API}/chat`, {
@@ -659,11 +688,22 @@ function ChatView({ idToken, user, onResetOnboarding }) {
       setThinkingSteps(data.steps || []);
       setTimeout(() => {
         setMessages(prev => [...prev, {
-          role:'assistant', content:data.response, pillar:data.pillar,
-          citations:data.citations, tools_to_call:data.tools_to_call,
-          awaiting_approval:data.awaiting_approval, session_id:data.session_id,
-          latency_ms:data.latency_ms, from_cache:data.from_cache,
-          onApprove:handleApprove, onReject:handleReject,
+          role:'assistant',
+          type: data.type || 'answer',
+          content: data.response,
+          pillar: data.pillar,
+          citations: data.citations,
+          tools_to_call: data.tools_to_call,
+          awaiting_approval: data.awaiting_approval,
+          session_id: data.session_id,
+          latency_ms: data.latency_ms,
+          from_cache: data.from_cache,
+          // clarifying-question fields
+          is_yes_no: data.is_yes_no,
+          question_index: data.question_index,
+          questions_total: data.questions_total,
+          onApprove: handleApprove,
+          onReject: handleReject,
         }]);
         setThinkingSteps([]);
       }, 400);
@@ -673,6 +713,8 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     }
     setLoading(false);
   };
+
+  const sendMessage = async () => submitValue(input);
 
   if (!profileLoaded) {
     return (
@@ -737,7 +779,14 @@ function ChatView({ idToken, user, onResetOnboarding }) {
         {showGreeting && greeting && (
           <GreetingCard greeting={greeting} onContinue={handleContinue} onStartFresh={handleStartFresh}/>
         )}
-        {messages.map((m, i) => <ChatMessage key={i} msg={m}/>)}
+        {messages.map((m, i) => (
+          <ChatMessage
+            key={i}
+            msg={m}
+            isLatest={i === messages.length - 1}
+            onQuickReply={submitValue}
+          />
+        ))}
         {thinkingSteps.length > 0 && <ThinkingIndicator steps={thinkingSteps}/>}
         <div ref={endRef}/>
       </div>
@@ -752,7 +801,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
         <div className="flex gap-3 max-w-3xl mx-auto">
           <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key==='Enter' && sendMessage()}
-            placeholder="Tell me what's on your mind today..."
+            placeholder={clarifyingActive ? "Type your answer..." : "Tell me what's on your mind today..."}
             className="flex-1 rounded-xl px-4 py-3 text-sm focus:outline-none transition"
             style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text)'}}/>
           <button onClick={sendMessage} disabled={loading || !input.trim()}

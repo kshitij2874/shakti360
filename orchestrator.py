@@ -9,18 +9,47 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Optional
 
 from observability import observe, TraceContext, metrics
 from validators import run_all_validations, SAFE_FALLBACK
 from memory import get_user_memory_context, ShortTermMemory
 from cache import get_cached_response, set_cached_response
+from clarifier import (
+    get_clarifying_questions,
+    is_yes_no,
+    build_clarification_context,
+    opening_kalpana_line,
+)
+from dual_user import get_user_profile
 import agents.health as health_agent
 import agents.finance as finance_agent
 import agents.career as career_agent
 
 logger = logging.getLogger("shakti.orchestrator")
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# ── Conversation state (in-memory) ──
+# Keyed by session_id. Holds clarifying phase between turns.
+_conversation_state: dict[str, dict[str, Any]] = {}
+
+
+def _get_session_state(session_id: str) -> dict[str, Any]:
+    return _conversation_state.get(session_id, {})
+
+
+def _set_session_state(session_id: str, state: dict[str, Any]) -> None:
+    _conversation_state[session_id] = state
+
+
+def _clear_session_state(session_id: str) -> None:
+    _conversation_state.pop(session_id, None)
+
+
+# How many recent answers count as the "same conversation" before we reset
+# and re-clarify a new topic
+_TOPIC_RESET_AFTER_TURNS = 0  # 0 = reset on first user msg after an answer
+
 
 CLASSIFIER_PROMPT = (
     "You are an intent classifier for a women's life companion. "
@@ -154,17 +183,157 @@ async def process_query(
     session_id: str,
 ) -> dict[str, Any]:
     """
-    Main orchestrator flow:
-    1. Check cache
-    2. Classify intent
-    3. Get memory context
-    4. Route to sub-agent
-    5. Validate response
-    6. Cache result
-    7. Return structured response
+    Main orchestrator flow with clarifying questions:
+      1. If no session state -> classify, store clarifying questions, ask first one
+      2. If phase=clarifying -> store this answer, ask next OR move to answering
+      3. If phase=answering or done -> reset for new topic (next user msg = new convo)
+    Answer phase:
+      4. Check cache, get memory, route to agent, validate, return.
     """
     start_time = time.time()
+    state = _get_session_state(session_id)
+    phase = state.get("phase")
 
+    # ── STATE: NEW CONVERSATION ──
+    if not phase or phase == "done":
+        # Classify the intent up front so we can ask pillar-tuned questions
+        intent = await classify_intent(query)
+        clarifying_qs = get_clarifying_questions(intent, age_band, query)
+
+        # If no template available (defensive), skip straight to answering
+        if not clarifying_qs:
+            _set_session_state(session_id, {
+                "phase": "answering_inline",
+                "pillar": intent,
+                "original_query": query,
+                "qa_pairs": [],
+            })
+            return await _generate_full_answer(
+                user_id=user_id,
+                age_band=age_band,
+                query=query,
+                pillar=intent,
+                qa_pairs=[],
+                session_id=session_id,
+                start_time=start_time,
+            )
+
+        # Fetch user's preferred_name for a warmer opener
+        profile = await get_user_profile(user_id) if user_id else {}
+        name = profile.get("preferred_name") or ""
+        opener = opening_kalpana_line(intent, name=name)
+
+        # Store state and return the first clarifying question
+        _set_session_state(session_id, {
+            "phase": "clarifying",
+            "pillar": intent,
+            "original_query": query,
+            "clarifying_questions": clarifying_qs,
+            "qa_pairs": [],
+            "asked_index": 0,
+        })
+
+        first_q = clarifying_qs[0]
+        latency_ms = (time.time() - start_time) * 1000
+
+        return {
+            "type": "clarifying_question",
+            "response": f"{opener}\n\n{first_q}",
+            "kalpana_says": opener,
+            "question": first_q,
+            "is_yes_no": is_yes_no(first_q),
+            "question_index": 0,
+            "questions_total": len(clarifying_qs),
+            "pillar": intent,
+            "sub_agent": intent,
+            "age_band": age_band,
+            "session_id": session_id,
+            "citations": [],
+            "tools_to_call": [],
+            "awaiting_approval": False,
+            "from_cache": False,
+            "latency_ms": round(latency_ms, 1),
+            "steps": [
+                {"step": "classified", "detail": f"Intent: {intent}"},
+                {"step": "clarifying", "detail": "Asking clarifying questions..."},
+            ],
+        }
+
+    # ── STATE: CLARIFYING ── store this answer, advance or finalize
+    if phase == "clarifying":
+        clarifying_qs = state.get("clarifying_questions", [])
+        idx = state.get("asked_index", 0)
+        qa_pairs = state.get("qa_pairs", [])
+
+        if idx < len(clarifying_qs):
+            qa_pairs.append({
+                "q": clarifying_qs[idx],
+                "a": query,
+            })
+
+        new_idx = idx + 1
+
+        if new_idx < len(clarifying_qs):
+            # Ask the next one
+            next_q = clarifying_qs[new_idx]
+            _set_session_state(session_id, {
+                **state,
+                "qa_pairs": qa_pairs,
+                "asked_index": new_idx,
+            })
+            latency_ms = (time.time() - start_time) * 1000
+            return {
+                "type": "clarifying_question",
+                "response": next_q,
+                "question": next_q,
+                "is_yes_no": is_yes_no(next_q),
+                "question_index": new_idx,
+                "questions_total": len(clarifying_qs),
+                "pillar": state.get("pillar"),
+                "sub_agent": state.get("pillar"),
+                "age_band": age_band,
+                "session_id": session_id,
+                "citations": [],
+                "tools_to_call": [],
+                "awaiting_approval": False,
+                "from_cache": False,
+                "latency_ms": round(latency_ms, 1),
+                "steps": [{"step": "clarifying", "detail": f"Question {new_idx + 1} of {len(clarifying_qs)}"}],
+            }
+
+        # All clarifying questions answered — synthesize the real answer
+        _set_session_state(session_id, {
+            **state,
+            "qa_pairs": qa_pairs,
+            "phase": "answering",
+        })
+
+        return await _generate_full_answer(
+            user_id=user_id,
+            age_band=age_band,
+            query=state.get("original_query", query),
+            pillar=state.get("pillar"),
+            qa_pairs=qa_pairs,
+            session_id=session_id,
+            start_time=start_time,
+        )
+
+    # ── STATE: ANSWERING / FOLLOWUP ── new user message after a final answer
+    # Treat this as a brand new topic: reset and re-clarify
+    _clear_session_state(session_id)
+    return await process_query(user_id=user_id, age_band=age_band, query=query, session_id=session_id)
+
+
+async def _generate_full_answer(
+    user_id: str,
+    age_band: str,
+    query: str,
+    pillar: Optional[str],
+    qa_pairs: list[dict[str, str]],
+    session_id: str,
+    start_time: float,
+) -> dict[str, Any]:
+    """Synthesise the final answer using the original query + clarifying Q&A."""
     # Initialize trace
     trace = TraceContext(
         session_id=session_id,
@@ -175,26 +344,31 @@ async def process_query(
 
     steps: list[dict[str, str]] = []
 
-    # Step 1: Classify intent
-    steps.append({"step": "classifying", "detail": "Classifying intent..."})
-    intent = await classify_intent(query)
+    # Step 1: Classify intent (use stored pillar if available, else reclassify)
+    intent = (pillar or "").upper() if pillar else await classify_intent(query)
+    if intent not in ("HEALTH", "FINANCE", "CAREER"):
+        intent = await classify_intent(query)
     steps.append({"step": "classified", "detail": f"Intent: {intent}"})
 
-    # Check cache
-    cached = await get_cached_response(query, age_band, intent)
+    # Build enriched query string for cache key and agent input
+    enriched_query = build_clarification_context(query, qa_pairs)
+
+    # Check cache (using enriched query so different clarifications => different cache)
+    cached = await get_cached_response(enriched_query, age_band, intent)
     if cached:
         latency_ms = (time.time() - start_time) * 1000
         metrics.record_session(latency_ms, intent, age_band, cost=0.0)
-        return {**cached, "from_cache": True, "latency_ms": round(latency_ms, 1)}
+        _set_session_state(session_id, {**_get_session_state(session_id), "phase": "done"})
+        return {**cached, "from_cache": True, "latency_ms": round(latency_ms, 1), "type": "answer"}
 
     # Step 2: Get memory context
     steps.append({"step": "memory", "detail": "Loading user context..."})
     memory_context = await get_user_memory_context(user_id, query)
 
-    # Step 3: Route to sub-agent
+    # Step 3: Route to sub-agent with enriched query
     steps.append({"step": "routing", "detail": f"Retrieving {intent.lower()} docs for {age_band}..."})
     agent_result = await route_to_agent(
-        query=query,
+        query=enriched_query,
         intent=intent,
         age_band=age_band,
         user_memory_context=memory_context,
@@ -247,6 +421,7 @@ async def process_query(
 
     # Build final response
     result = {
+        "type": "answer",
         "response": response_text,
         "sub_agent": intent,
         "pillar": intent,
@@ -265,6 +440,7 @@ async def process_query(
         "latency_ms": round(latency_ms, 1),
         "from_cache": False,
         "steps": steps,
+        "clarifying_qa": qa_pairs,
     }
 
     # Record metrics
@@ -277,13 +453,16 @@ async def process_query(
 
     # Cache the result (without steps/latency for consistency)
     cache_data = {k: v for k, v in result.items() if k not in ("steps", "latency_ms", "from_cache")}
-    await set_cached_response(query, age_band, intent, cache_data)
+    await set_cached_response(enriched_query, age_band, intent, cache_data)
+
+    # Mark conversation as done so the next user message starts a new clarifying flow
+    _set_session_state(session_id, {**_get_session_state(session_id), "phase": "done"})
 
     # Log trace
     trace.add_generation(
         name=f"{intent.lower()}_response",
         model=agent_result.get("model_used", DEFAULT_MODEL),
-        input_text=query,
+        input_text=enriched_query,
         output_text=response_text,
         metadata={
             "age_band": age_band,
@@ -291,6 +470,7 @@ async def process_query(
             "citations_count": len(citations),
             "hallucination_check_passed": hallucination_passed,
             "latency_ms": round(latency_ms, 1),
+            "clarifying_qa_count": len(qa_pairs),
         },
     )
     trace_url = trace.finalize()
