@@ -306,14 +306,14 @@ function ChatMessage({ msg }) {
 }
 
 // ═══════════════════════════════════════
-// ONBOARDING VIEW
+// ONBOARDING VIEW — Conversational chat-style with branching
 // ═══════════════════════════════════════
 function OnboardingView({ idToken, onComplete }) {
-  const [step, setStep] = useState(0);
-  const [totalSteps, setTotalSteps] = useState(5);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [textInput, setTextInput] = useState('');
   const [messages, setMessages] = useState([]);
+  const [answeredCount, setAnsweredCount] = useState(0);
+  const [totalSteps, setTotalSteps] = useState(6);
   const [transitioning, setTransitioning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [completing, setCompleting] = useState(false);
@@ -324,9 +324,11 @@ function OnboardingView({ idToken, onComplete }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages]);
 
-  useEffect(() => {
-    fetchState();
-  }, []);
+  useEffect(() => { fetchState(); }, []);
+
+  // Helper — normalize option (string or {value,label})
+  const optionValue = (o) => typeof o === 'string' ? o : o.value;
+  const optionLabel = (o) => typeof o === 'string' ? o : o.label;
 
   const fetchState = async () => {
     try {
@@ -336,11 +338,12 @@ function OnboardingView({ idToken, onComplete }) {
         onComplete();
         return;
       }
-      setStep(data.current_step);
-      setTotalSteps(data.total_steps);
-      if (data.question) {
-        setCurrentQuestion(data.question);
-        setMessages([{ role:'assistant', content: data.question.question, questionType: data.question.type, options: data.question.options }]);
+      const q = data.current_question;
+      if (q) {
+        setCurrentQuestion(q);
+        setAnsweredCount(data.answered_count || 0);
+        setTotalSteps(data.total_steps || 6);
+        setMessages([{ role:'assistant', content: q.kalpana_says, question: q }]);
       }
     } catch(e) {
       console.error('Failed to fetch onboarding state:', e);
@@ -348,42 +351,40 @@ function OnboardingView({ idToken, onComplete }) {
     setLoading(false);
   };
 
-  const submitAnswer = async (answer) => {
+  const submitAnswer = async (value, label) => {
     if (!currentQuestion || transitioning) return;
     setTransitioning(true);
 
-    // Add user message
-    setMessages(prev => [...prev, { role:'user', content: answer }]);
+    // Add user message bubble (display the label, send the value)
+    setMessages(prev => [...prev, { role:'user', content: label || value }]);
 
     try {
       const res = await fetch(`${API}/onboarding/answer`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify({ question_id: currentQuestion.id, answer: answer }),
+        body: JSON.stringify({ question_id: currentQuestion.id, answer: value }),
       });
       const data = await res.json();
 
       if (data.complete) {
-        // Show completion message
         setCompleting(true);
         setMessages(prev => [...prev, {
           role:'assistant',
-          content: "Wonderful! I've saved your preferences. Setting up your personalized experience..."
+          content: "Wonderful. Setting up your space\u2026"
         }]);
-        setTimeout(() => onComplete(), 2000);
+        setTimeout(() => onComplete(), 1800);
         return;
       }
 
-      // Show next question after a brief delay
       const nextQ = data.next_question;
-      setStep(data.next_step);
+      setAnsweredCount(c => c + 1);
       setTimeout(() => {
-        setMessages(prev => [...prev, { role:'assistant', content: nextQ.question, questionType: nextQ.type, options: nextQ.options }]);
+        setMessages(prev => [...prev, { role:'assistant', content: nextQ.kalpana_says, question: nextQ }]);
         setCurrentQuestion(nextQ);
         setTextInput('');
         setTransitioning(false);
         inputRef.current?.focus();
-      }, 500);
+      }, 450);
     } catch(e) {
       console.error('Failed to save answer:', e);
       setTransitioning(false);
@@ -401,17 +402,19 @@ function OnboardingView({ idToken, onComplete }) {
     );
   }
 
+  const progressPct = totalSteps > 0 ? (answeredCount / totalSteps) * 100 : 0;
+
   return (
-    <div className="flex flex-col h-[calc(100vh-72px)]">
+    <div className="flex flex-col h-[calc(100vh-72px)]" style={{background:'var(--kalpana-bg)'}}>
       {/* Progress Bar */}
-      <div className="px-4 py-3" style={{borderBottom:'1px solid var(--kalpana-rose-100)'}}>
+      <div className="px-4 py-3" style={{borderBottom:'1px solid var(--kalpana-rose-100)', background:'white'}}>
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Setting up your profile</span>
-            <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Question {Math.min(step + 1, totalSteps)} of {totalSteps}</span>
+            <span className="text-xs font-heading" style={{color:'var(--kalpana-rose-700)'}}>Getting to know you</span>
+            <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Step {Math.min(answeredCount + 1, totalSteps)} of {totalSteps}</span>
           </div>
           <div className="w-full rounded-full h-1.5 overflow-hidden" style={{background:'var(--kalpana-rose-50)'}}>
-            <div className="h-full rounded-full transition-all duration-500" style={{width:`${((step) / totalSteps) * 100}%`, background:'linear-gradient(to right, var(--kalpana-rose-500), var(--kalpana-rose-700))'}}></div>
+            <div className="h-full rounded-full transition-all duration-500" style={{width:`${progressPct}%`, background:'linear-gradient(to right, var(--kalpana-rose-500), var(--kalpana-rose-700))'}}></div>
           </div>
         </div>
       </div>
@@ -419,37 +422,59 @@ function OnboardingView({ idToken, onComplete }) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         <div className="max-w-2xl mx-auto space-y-4">
-          {messages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} fade-in`}>
-              <div className={msg.role === 'user' ? 'kalpana-bubble-user' : 'kalpana-bubble-bot'}>
-                {msg.role === 'assistant' && (
-                  <div className="flex items-center gap-2 mb-2">
-                    <KalpanaLogo size={18}/>
-                    <span className="text-xs font-medium font-heading" style={{color:'var(--kalpana-rose-700)'}}>Kalpana</span>
+          {messages.map((msg, i) => {
+            const isLatest = i === messages.length - 1;
+            const isAssistant = msg.role === 'assistant';
+            const q = msg.question;
+            return (
+              <div key={i} className={`flex ${isAssistant ? 'justify-start' : 'justify-end'} fade-in`}>
+                {isAssistant ? (
+                  <div className="flex gap-2 items-start max-w-[85%]">
+                    <div className="flex-shrink-0 mt-1"><KalpanaLogo size={28}/></div>
+                    <div className="kalpana-bubble-bot">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-medium font-heading" style={{color:'var(--kalpana-rose-700)'}}>Kalpana</span>
+                      </div>
+                      <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+                      {/* Choice buttons for latest assistant message */}
+                      {isLatest && q?.type === 'choice' && !completing && (
+                        <div className="grid grid-cols-2 gap-2 mt-4">
+                          {q.options.map((opt, j) => (
+                            <button key={j}
+                              onClick={() => submitAnswer(optionValue(opt), optionLabel(opt))}
+                              disabled={transitioning}
+                              className="text-left text-sm font-medium rounded-xl px-4 py-3 transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
+                              style={{background:'white', border:'1.5px solid var(--kalpana-rose-100)', color:'var(--kalpana-text)', boxShadow:'0 1px 3px rgba(233, 78, 138, 0.05)'}}>
+                              {optionLabel(opt)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-                <div className="text-sm leading-relaxed">{msg.content}</div>
-                {/* Choice buttons for the latest assistant message */}
-                {msg.role === 'assistant' && i === messages.length - 1 && msg.questionType === 'choice' && !completing && (
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {msg.options.map((opt, j) => (
-                      <button key={j} onClick={() => submitAnswer(opt)} disabled={transitioning}
-                        className="kalpana-btn-secondary text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
+                ) : (
+                  <div className="kalpana-bubble-user text-sm leading-relaxed">{msg.content}</div>
                 )}
               </div>
+            );
+          })}
+          {transitioning && !completing && (
+            <div className="flex gap-2 items-start fade-in">
+              <div className="flex-shrink-0 mt-1"><KalpanaLogo size={28}/></div>
+              <div className="kalpana-bubble-bot">
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full mr-1" style={{background:'var(--kalpana-rose-500)'}}></div>
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full mr-1" style={{background:'var(--kalpana-rose-500)', animationDelay:'0.2s'}}></div>
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full" style={{background:'var(--kalpana-rose-500)', animationDelay:'0.4s'}}></div>
+              </div>
             </div>
-          ))}
+          )}
           {completing && (
             <div className="flex justify-center py-4 fade-in">
-              <div className="flex items-center gap-2" style={{color:'var(--kalpana-rose-700)'}}>
+              <div className="flex items-center gap-2 font-heading" style={{color:'var(--kalpana-rose-700)'}}>
                 <div className="thinking-dot inline-block w-2 h-2 rounded-full" style={{background:'var(--kalpana-rose-500)'}}></div>
                 <div className="thinking-dot inline-block w-2 h-2 rounded-full" style={{background:'var(--kalpana-rose-500)', animationDelay:'0.2s'}}></div>
                 <div className="thinking-dot inline-block w-2 h-2 rounded-full" style={{background:'var(--kalpana-rose-500)', animationDelay:'0.4s'}}></div>
-                <span className="text-sm ml-1">Preparing your personalized experience...</span>
+                <span className="text-sm ml-1 italic">Setting up your space…</span>
               </div>
             </div>
           )}
@@ -462,11 +487,11 @@ function OnboardingView({ idToken, onComplete }) {
         <div className="p-4" style={{borderTop:'1px solid var(--kalpana-rose-100)', background:'white'}}>
           <div className="flex gap-3 max-w-2xl mx-auto">
             <input ref={inputRef} value={textInput} onChange={e => setTextInput(e.target.value)}
-              onKeyDown={e => e.key==='Enter' && textInput.trim() && submitAnswer(textInput.trim())}
-              placeholder="Type your answer..."
+              onKeyDown={e => e.key==='Enter' && textInput.trim() && submitAnswer(textInput.trim(), textInput.trim())}
+              placeholder={currentQuestion.placeholder || "Type your answer..."}
               className="flex-1 rounded-xl px-4 py-3 text-sm focus:outline-none transition"
               style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text)'}}/>
-            <button onClick={() => textInput.trim() && submitAnswer(textInput.trim())} disabled={!textInput.trim() || transitioning}
+            <button onClick={() => textInput.trim() && submitAnswer(textInput.trim(), textInput.trim())} disabled={!textInput.trim() || transitioning}
               className="kalpana-btn-primary text-sm disabled:opacity-30 disabled:cursor-not-allowed">
               Send
             </button>

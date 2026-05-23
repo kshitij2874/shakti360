@@ -35,7 +35,14 @@ logger = logging.getLogger("shakti.main")
 # ── Lazy imports (avoid import-time GCP failures) ──
 from observability import metrics
 from tools import execute_tool
-from onboarding import get_onboarding_state, save_onboarding_answer, OnboardingAnswer, ONBOARDING_QUESTIONS
+from onboarding import (
+    OnboardingAnswer,
+    get_onboarding_state,
+    save_onboarding_answer,
+    get_current_question,
+    get_visible_questions,
+    ONBOARDING_FLOW,
+)
 from greeting import generate_greeting
 
 
@@ -289,20 +296,38 @@ async def health_check():
 async def onboarding_state(user: dict = Depends(verify_token)):
     """Get current onboarding state for the authenticated user."""
     state = await get_onboarding_state(user["uid"])
-    if not state["complete"]:
-        step = state["step"]
+
+    if state["complete"]:
+        prof = state["profile"] or {}
         return JSONResponse(content={
-            "complete": False,
-            "current_step": step,
-            "total_steps": len(ONBOARDING_QUESTIONS),
-            "question": ONBOARDING_QUESTIONS[step] if step < len(ONBOARDING_QUESTIONS) else None,
+            "complete": True,
+            "profile": {
+                "preferred_name": prof.get("preferred_name"),
+                "age_band": prof.get("age_band"),
+                "language": prof.get("language"),
+                "user_mode": prof.get("user_mode"),
+                "subject_role": prof.get("subject_role"),
+                "asker_role": prof.get("asker_role"),
+            },
         })
-    return JSONResponse(content={"complete": True, "profile": state["profile"]})
+
+    next_q = get_current_question(state["answers"])
+    visible = get_visible_questions(state["answers"])
+    answered = len(state["answers"])
+    total = max(len(visible), answered + (1 if next_q else 0))
+
+    return JSONResponse(content={
+        "complete": False,
+        "current_question": next_q,
+        "answered_count": answered,
+        "total_steps": total,
+        "answers_so_far": state["answers"],
+    })
 
 
 @app.post("/onboarding/answer")
 async def onboarding_answer(answer: OnboardingAnswer, user: dict = Depends(verify_token)):
-    """Save an onboarding answer and return the next question."""
+    """Save an onboarding answer and return the next question (or completion)."""
     result = await save_onboarding_answer(user["uid"], answer)
     return JSONResponse(content=result)
 
