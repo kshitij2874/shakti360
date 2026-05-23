@@ -249,9 +249,28 @@ TOOL_REGISTRY: dict[str, Any] = {
     "get_helplines": get_helplines,
 }
 
+# ── Advanced tools (loaded lazily to avoid import-time failures) ──
+_advanced_tools_loaded = False
+
+def _load_advanced_tools():
+    """Lazily load advanced tools from advanced_tools.py."""
+    global _advanced_tools_loaded
+    if _advanced_tools_loaded:
+        return
+    try:
+        from advanced_tools import ADVANCED_TOOL_REGISTRY
+        TOOL_REGISTRY.update(ADVANCED_TOOL_REGISTRY)
+        _advanced_tools_loaded = True
+        logger.info(f"Loaded {len(ADVANCED_TOOL_REGISTRY)} advanced tools")
+    except Exception as e:
+        logger.warning(f"Advanced tools not loaded: {e}")
+
 
 async def execute_tool(tool_name: str, params: dict[str, Any]) -> Any:
     """Execute a registered tool by name. Used after human approval."""
+    # Load advanced tools on first call
+    _load_advanced_tools()
+    
     if tool_name not in TOOL_REGISTRY:
         return {"error": f"Unknown tool: {tool_name}"}
 

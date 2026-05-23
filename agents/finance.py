@@ -97,6 +97,22 @@ async def run(
                 "reason": f"User asked about scheme: {scheme_key}",
             })
             break
+    
+    # Budget analysis tool - when user asks about budget, spending, expenses
+    if any(w in query_lower for w in ["budget", "spending", "expenses", "where does my money go", "track expenses", "financial health"]):
+        tools_to_call.append({
+            "tool": "analyze_budget",
+            "params": {"monthly_income": 50000, "expenses": {}, "savings_goal": None},
+            "reason": "User is asking for budget analysis and spending insights.",
+        })
+    
+    # Scheme eligibility checker - when user asks what schemes they qualify for
+    if any(w in query_lower for w in ["eligible", "qualify", "which schemes", "what schemes", "benefits available"]):
+        tools_to_call.append({
+            "tool": "check_scheme_eligibility",
+            "params": {"user_profile": {}, "scheme_type": "all"},
+            "reason": "User is asking about scheme eligibility.",
+        })
 
     # 5. Legacy citation strings (for validators)
     citations = []

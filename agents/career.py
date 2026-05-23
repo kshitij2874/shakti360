@@ -82,6 +82,33 @@ async def run(
                 "reason": f"User asked about scheme/program: {scheme_key}",
             })
             break
+    
+    # Job search tool - when user asks about finding jobs, job listings, opportunities
+    if any(w in query_lower for w in ["find jobs", "job listings", "job openings", "job search", "looking for work", "employment opportunities", "hiring", "vacancies"]):
+        # Extract job type from query
+        job_type = "software"  # default
+        if any(w in query_lower for w in ["data", "analytics", "machine learning", "ai"]):
+            job_type = "data"
+        elif any(w in query_lower for w in ["marketing", "digital", "content", "social media"]):
+            job_type = "marketing"
+        elif any(w in query_lower for w in ["finance", "accounting", "banking"]):
+            job_type = "finance"
+        elif any(w in query_lower for w in ["health", "medical", "clinical"]):
+            job_type = "healthcare"
+        
+        tools_to_call.append({
+            "tool": "search_jobs_web",
+            "params": {"query": job_type, "location": "India", "num_results": 5},
+            "reason": "User is looking for job opportunities.",
+        })
+    
+    # Scheme eligibility checker - when user asks what programs they qualify for
+    if any(w in query_lower for w in ["eligible", "qualify", "which programs", "what programs", "benefits available"]):
+        tools_to_call.append({
+            "tool": "check_scheme_eligibility",
+            "params": {"user_profile": {}, "scheme_type": "career"},
+            "reason": "User is asking about career program eligibility.",
+        })
 
     # 5. Legacy citation strings
     citations = []

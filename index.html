@@ -442,6 +442,11 @@ const TOOL_LABELS = {
   lookup_scheme:      { icon:'📋', name:'Look up a government scheme' },
   calculate_sip:      { icon:'🧮', name:'Run a SIP calculation' },
   get_helplines:      { icon:'📞', name:'Share helpline numbers' },
+  search_jobs_web:    { icon:'💼', name:'Search job listings' },
+  analyze_budget:     { icon:'📊', name:'Analyze budget & spending' },
+  assess_health_risk: { icon:'🩺', name:'Health risk assessment' },
+  check_scheme_eligibility: { icon:'✅', name:'Check scheme eligibility' },
+  mental_wellbeing_check:   { icon:'🧠', name:'Mental wellbeing check' },
 };
 
 function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
@@ -571,6 +576,148 @@ function ToolResultBlock({ tool, result }) {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
           {lines.map(([k, v]) => (
             <div key={k}><span style={{color:'var(--kalpana-text-soft)'}}>{k}:</span> <strong>{v}</strong></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Job search results (search_jobs_web)
+  if (result && typeof result === 'object' && result.success && result.results && tool === 'search_jobs_web') {
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Job opportunities</div>
+        <div className="space-y-2">
+          {result.results.slice(0, 5).map((job, i) => (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
+              <div className="font-medium" style={{color:'var(--kalpana-text)'}}>{job.title}</div>
+              <div className="text-xs mt-0.5" style={{color:'var(--kalpana-text-soft)'}}>{job.company} · {job.location}</div>
+              <div className="flex gap-3 mt-1 text-xs" style={{color:'var(--kalpana-text-soft)'}}>
+                <span>{job.salary}</span>
+                <span>{job.type}</span>
+                <span>{job.posted}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Budget analysis results (analyze_budget)
+  if (result && typeof result === 'object' && result.success && result.summary && tool === 'analyze_budget') {
+    const summary = result.summary;
+    const scoreColor = result.health_score >= 70 ? '#4a7a3f' : result.health_score >= 40 ? '#b8772b' : '#b03168';
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Budget analysis</div>
+        <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Income:</span> <strong>₹{summary.monthly_income?.toLocaleString()}</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Expenses:</span> <strong>₹{summary.total_expenses?.toLocaleString()}</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Savings:</span> <strong>₹{summary.current_savings?.toLocaleString()}</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Savings rate:</span> <strong>{summary.savings_rate}%</strong></div>
+        </div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Health score:</span>
+          <div className="flex-1 rounded-full h-2" style={{background:'var(--kalpana-rose-50)'}}>
+            <div className="h-full rounded-full" style={{width:`${result.health_score}%`, background:scoreColor}}></div>
+          </div>
+          <span className="text-xs font-bold" style={{color:scoreColor}}>{result.health_score}/100</span>
+        </div>
+        {result.recommendations && result.recommendations.length > 0 && (
+          <div className="mt-2">
+            <div className="text-xs font-medium mb-1" style={{color:'var(--kalpana-text-soft)'}}>Recommendations:</div>
+            {result.recommendations.slice(0, 3).map((rec, i) => (
+              <div key={i} className="text-xs mt-1" style={{color:'var(--kalpana-text)'}}>• {rec.message}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Health risk assessment (assess_health_risk)
+  if (result && typeof result === 'object' && result.success && result.risk_level && tool === 'assess_health_risk') {
+    const riskColors = { low: '#4a7a3f', moderate: '#b8772b', high: '#b03168' };
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Health risk assessment</div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Risk level:</span>
+          <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{background:`${riskColors[result.risk_level]}20`, color:riskColors[result.risk_level]}}>
+            {result.risk_level}
+          </span>
+        </div>
+        {result.risk_factors && result.risk_factors.length > 0 && (
+          <div className="mb-2">
+            <div className="text-xs font-medium mb-1" style={{color:'var(--kalpana-text-soft)'}}>Risk factors:</div>
+            {result.risk_factors.slice(0, 3).map((rf, i) => (
+              <div key={i} className="text-xs mt-1" style={{color:'var(--kalpana-text)'}}>• {rf.factor} ({rf.impact})</div>
+            ))}
+          </div>
+        )}
+        {result.recommendations && result.recommendations.length > 0 && (
+          <div>
+            <div className="text-xs font-medium mb-1" style={{color:'var(--kalpana-text-soft)'}}>Recommendations:</div>
+            {result.recommendations.slice(0, 3).map((rec, i) => (
+              <div key={i} className="text-xs mt-1" style={{color:'var(--kalpana-text)'}}>• {rec}</div>
+            ))}
+          </div>
+        )}
+        <div className="text-[10px] mt-2 italic" style={{color:'var(--kalpana-text-soft)'}}>{result.disclaimer}</div>
+      </div>
+    );
+  }
+
+  // Mental wellbeing check (mental_wellbeing_check)
+  if (result && typeof result === 'object' && result.success && result.wellbeing_level && tool === 'mental_wellbeing_check') {
+    const wellbeingColors = { good: '#4a7a3f', fair: '#b8772b', concerning: '#b03168' };
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Mental wellbeing check</div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs" style={{color:'var(--kalpana-text-soft)'}}>Wellbeing:</span>
+          <span className="px-2 py-0.5 rounded-full text-xs font-medium" style={{background:`${wellbeingColors[result.wellbeing_level]}20`, color:wellbeingColors[result.wellbeing_level]}}>
+            {result.wellbeing_level}
+          </span>
+        </div>
+        {result.strategies && result.strategies.length > 0 && (
+          <div>
+            <div className="text-xs font-medium mb-1" style={{color:'var(--kalpana-text-soft)'}}>Coping strategies:</div>
+            {result.strategies.slice(0, 4).map((str, i) => (
+              <div key={i} className="text-xs mt-1" style={{color:'var(--kalpana-text)'}}>• {str}</div>
+            ))}
+          </div>
+        )}
+        {result.crisis_resources && result.crisis_resources.length > 0 && (
+          <div className="mt-2 p-2 rounded" style={{background:'#fef9e7', border:'1px solid #f4c785'}}>
+            <div className="text-xs font-medium mb-1" style={{color:'#b8772b'}}>Crisis support:</div>
+            {result.crisis_resources.map((res, i) => (
+              <div key={i} className="text-xs mt-1" style={{color:'var(--kalpana-text)'}}>
+                <strong>{res.name}:</strong> {res.number} ({res.hours})
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="text-[10px] mt-2 italic" style={{color:'var(--kalpana-text-soft)'}}>{result.disclaimer}</div>
+      </div>
+    );
+  }
+
+  // Scheme eligibility (check_scheme_eligibility)
+  if (result && typeof result === 'object' && result.success && result.schemes && tool === 'check_scheme_eligibility') {
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Eligible schemes ({result.total_eligible})</div>
+        <div className="space-y-2">
+          {result.schemes.slice(0, 5).map((scheme, i) => (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
+              <div className="font-medium" style={{color:'var(--kalpana-text)'}}>{scheme.name}</div>
+              <div className="text-xs mt-0.5" style={{color:'var(--kalpana-text-soft)'}}>{scheme.type}</div>
+              <div className="text-xs mt-1"><strong>Eligibility:</strong> {scheme.eligibility}</div>
+              <div className="text-xs mt-1"><strong>Benefit:</strong> {scheme.benefit}</div>
+              <div className="text-xs mt-1"><strong>How to apply:</strong> {scheme.how_to_apply}</div>
+            </div>
           ))}
         </div>
       </div>

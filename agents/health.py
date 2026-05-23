@@ -102,6 +102,22 @@ async def run(
                 "reason": f"User asked about government scheme: {kw}",
             })
             break
+    
+    # Health assessment tool - when user describes symptoms or asks for health check
+    if any(w in query_lower for w in ["symptom", "health check", "risk assessment", "health assessment", "am i at risk", "health risk"]):
+        tools_to_call.append({
+            "tool": "assess_health_risk",
+            "params": {"age": 25, "gender": "female", "symptoms": [], "conditions": [], "lifestyle": {}},
+            "reason": "User is asking for a health risk assessment.",
+        })
+    
+    # Mental wellbeing tool - when user expresses stress, anxiety, mood concerns
+    if any(w in query_lower for w in ["stress", "anxious", "depressed", "mood", "mental health", "wellbeing", "overwhelmed", "burnout"]):
+        tools_to_call.append({
+            "tool": "mental_wellbeing_check",
+            "params": {"mood": "neutral", "stress_level": "moderate", "sleep_quality": "fair", "social_support": "moderate", "recent_changes": []},
+            "reason": "User is expressing mental health concerns.",
+        })
 
     # 5. Extract legacy citation strings (for validators) from RAG sources
     citations = []

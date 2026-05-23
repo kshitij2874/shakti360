@@ -332,9 +332,10 @@ async def _generate_next_steps(
         "RULES:\n"
         "- Each label is a friendly question starting with 'Want me to...' or 'Would you like...'\n"
         "- label max 80 chars\n"
-        "- action_type: 'tool_call' for external API (maps, scheme lookup, calculator); "
+        "- action_type: 'tool_call' for external API (maps, scheme lookup, calculator, job search, budget analysis, health assessment); "
         "'agent_continue' for another conversational turn\n"
-        "- Available tools: find_nearby_clinic, find_nearby_police, lookup_scheme, calculate_sip\n"
+        "- Available tools: find_nearby_clinic, find_nearby_police, lookup_scheme, calculate_sip, "
+        "search_jobs_web, analyze_budget, assess_health_risk, mental_wellbeing_check, check_scheme_eligibility\n"
         f"- Match the tone for age band {age_band}.\n\n"
         "Output the JSON array now:"
     )
@@ -411,20 +412,26 @@ _FALLBACK_NEXT_STEPS = {
     "HEALTH": [
         {"id": "find_clinics", "label": "Want me to find women's health clinics nearby?",
          "action_type": "tool_call", "tool_or_context": "find_nearby_clinic"},
+        {"id": "health_check", "label": "Would you like a quick health risk assessment?",
+         "action_type": "tool_call", "tool_or_context": "assess_health_risk"},
         {"id": "schemes", "label": "Want to know which government health schemes you qualify for?",
-         "action_type": "agent_continue", "tool_or_context": "health_schemes_check"},
+         "action_type": "tool_call", "tool_or_context": "check_scheme_eligibility"},
     ],
     "FINANCE": [
         {"id": "calculator", "label": "Want me to run a quick SIP calculation for your goal?",
          "action_type": "tool_call", "tool_or_context": "calculate_sip"},
+        {"id": "budget", "label": "Would you like me to analyze your budget and spending?",
+         "action_type": "tool_call", "tool_or_context": "analyze_budget"},
         {"id": "schemes", "label": "Want to know which government savings schemes you qualify for?",
-         "action_type": "agent_continue", "tool_or_context": "finance_schemes_check"},
+         "action_type": "tool_call", "tool_or_context": "check_scheme_eligibility"},
     ],
     "CAREER": [
+        {"id": "jobs", "label": "Want me to search for relevant job opportunities?",
+         "action_type": "tool_call", "tool_or_context": "search_jobs_web"},
         {"id": "returnship", "label": "Want to see returnship and upskilling programs near you?",
          "action_type": "agent_continue", "tool_or_context": "career_programs"},
-        {"id": "mentors", "label": "Want me to share women-focused mentorship platforms?",
-         "action_type": "agent_continue", "tool_or_context": "mentorship_platforms"},
+        {"id": "schemes", "label": "Want to know which career programs you qualify for?",
+         "action_type": "tool_call", "tool_or_context": "check_scheme_eligibility"},
     ],
 }
 
