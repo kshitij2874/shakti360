@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ShaktiAgent — AI Life Companion for Women</title>
+  <meta name="description" content="ShaktiAgent: Multi-agent AI companion for women across Health, Finance, and Career life pillars."/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          colors: {
+            shakti: { 50:'#fdf2f8',100:'#fce7f3',200:'#fbcfe8',300:'#f9a8d4',400:'#f472b6',500:'#ec4899',600:'#db2777',700:'#be185d',800:'#9d174d',900:'#831843' },
+            health: { light:'#dbeafe', DEFAULT:'#3b82f6', dark:'#1e40af' },
+            finance: { light:'#d1fae5', DEFAULT:'#10b981', dark:'#065f46' },
+            career: { light:'#ede9fe', DEFAULT:'#8b5cf6', dark:'#5b21b6' },
+            surface: { DEFAULT:'#0f0f1a', card:'#1a1a2e', hover:'#252540' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0f0f1a; }
+    .glass { background: rgba(26,26,46,0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
+    .glow-pink { box-shadow: 0 0 30px rgba(236,72,153,0.15); }
+    .glow-blue { box-shadow: 0 0 20px rgba(59,130,246,0.15); }
+    .glow-green { box-shadow: 0 0 20px rgba(16,185,129,0.15); }
+    .glow-purple { box-shadow: 0 0 20px rgba(139,92,246,0.15); }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .thinking-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+    @keyframes fade-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation: fade-in 0.3s ease-out; }
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    .shimmer { background: linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.05) 50%,rgba(255,255,255,0) 100%); background-size: 200% 100%; animation: shimmer 2s infinite; }
+    ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:transparent } ::-webkit-scrollbar-thumb { background:#333; border-radius:3px }
+  </style>
+</head>
+<body class="font-sans text-gray-100 min-h-screen">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const API = window.location.origin;
+
+// ─── Pillar Config ───
+const PILLAR_STYLES = {
+  HEALTH:  { bg:'bg-blue-500/10', border:'border-blue-500/30', text:'text-blue-400', icon:'🏥', glow:'glow-blue' },
+  FINANCE: { bg:'bg-emerald-500/10', border:'border-emerald-500/30', text:'text-emerald-400', icon:'💰', glow:'glow-green' },
+  CAREER:  { bg:'bg-violet-500/10', border:'border-violet-500/30', text:'text-violet-400', icon:'🚀', glow:'glow-purple' },
+};
+
+// ─── Thinking Indicator ───
+function ThinkingIndicator({ steps }) {
+  const current = steps[steps.length - 1];
+  if (!current) return null;
+  return (
+    <div className="flex items-center gap-2 px-4 py-2 text-sm text-gray-400 fade-in">
+      <span className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400"></span>
+      <span className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400" style={{animationDelay:'0.2s'}}></span>
+      <span className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400" style={{animationDelay:'0.4s'}}></span>
+      <span className="ml-1 italic">{current.detail}</span>
+    </div>
+  );
+}
+
+// ─── Citation Chips ───
+function CitationChips({ citations }) {
+  if (!citations || citations.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {citations.map((c, i) => {
+        const label = c.replace(/\[Source:\s*/i,'').replace(/\]$/,'').split(',')[0].trim().substring(0,30);
+        return <span key={i} className="inline-block px-2 py-0.5 text-[10px] font-medium rounded-full bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 transition cursor-default">{label}</span>;
+      })}
+    </div>
+  );
+}
+
+// ─── Approval Card ───
+function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
+  return (
+    <div className="glass rounded-xl p-4 my-3 border border-amber-500/30 fade-in">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-amber-400 text-lg">⚠️</span>
+        <h4 className="font-semibold text-amber-300 text-sm">Action Approval Required</h4>
+      </div>
+      <div className="space-y-2 mb-4">
+        {tools.map((t, i) => (
+          <div key={i} className="bg-black/20 rounded-lg p-3 text-xs">
+            <div className="font-mono text-amber-200">{t.tool}({JSON.stringify(t.params)})</div>
+            <div className="text-gray-400 mt-1">{t.reason}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-3">
+        <button onClick={() => onApprove(sessionId)} className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all hover:scale-[1.02]">✓ Approve</button>
+        <button onClick={() => onReject(sessionId)} className="flex-1 py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-white font-medium text-sm transition-all hover:scale-[1.02]">✕ Reject</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Chat Message ───
+function ChatMessage({ msg }) {
+  const isUser = msg.role === 'user';
+  const pillar = PILLAR_STYLES[msg.pillar] || {};
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} fade-in`}>
+      <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${isUser ? 'bg-shakti-600/20 border border-shakti-500/20' : 'glass'}`}>
+        {!isUser && msg.pillar && (
+          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold mb-2 ${pillar.bg} ${pillar.border} ${pillar.text} border`}>
+            {pillar.icon} {msg.pillar}
+          </div>
+        )}
+        <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+        {!isUser && <CitationChips citations={msg.citations}/>}
+        {!isUser && msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
+          <ApprovalCard tools={msg.tools_to_call} sessionId={msg.session_id} onApprove={msg.onApprove} onReject={msg.onReject}/>
+        )}
+        {!isUser && msg.latency_ms && (
+          <div className="text-[10px] text-gray-500 mt-2">{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// CHAT VIEW
+// ═══════════════════════════════════════
+function ChatView() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [ageBand, setAgeBand] = useState('25-40');
+  const [userId] = useState(() => 'user_' + Math.random().toString(36).substr(2,6));
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID().substring(0,12));
+  const [loading, setLoading] = useState(false);
+  const [thinkingSteps, setThinkingSteps] = useState([]);
+  const endRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages, thinkingSteps]);
+
+  const handleApprove = async (sid) => {
+    try {
+      const res = await fetch(`${API}/approve`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid}) });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role:'assistant', content:'✅ Tools executed successfully:\n\n' + JSON.stringify(data.tool_results, null, 2), pillar:'' }]);
+    } catch(e) { console.error(e); }
+  };
+
+  const handleReject = async (sid) => {
+    try {
+      await fetch(`${API}/reject`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid}) });
+      setMessages(prev => [...prev, { role:'assistant', content:'❌ Tool execution was rejected. How else can I help?', pillar:'' }]);
+    } catch(e) { console.error(e); }
+  };
+
+  const sendMessage = async () => {
+    const q = input.trim();
+    if (!q || loading) return;
+    setInput('');
+    setMessages(prev => [...prev, { role:'user', content:q }]);
+    setLoading(true);
+    setThinkingSteps([{ step:'classifying', detail:'Classifying intent...' }]);
+
+    try {
+      const res = await fetch(`${API}/chat`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ user_id:userId, age_band:ageBand, query:q, session_id:sessionId }),
+      });
+      const data = await res.json();
+      setThinkingSteps(data.steps || []);
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          role:'assistant', content:data.response, pillar:data.pillar,
+          citations:data.citations, tools_to_call:data.tools_to_call,
+          awaiting_approval:data.awaiting_approval, session_id:data.session_id,
+          latency_ms:data.latency_ms, from_cache:data.from_cache,
+          onApprove:handleApprove, onReject:handleReject,
+        }]);
+        setThinkingSteps([]);
+      }, 400);
+    } catch(e) {
+      setMessages(prev => [...prev, { role:'assistant', content:'Sorry, something went wrong. Please try again.' }]);
+      setThinkingSteps([]);
+    }
+    setLoading(false);
+  };
+
+  const AGE_BANDS = ['11-24','25-40','41+'];
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-72px)]">
+      {/* Age Band Selector */}
+      <div className="flex items-center justify-center gap-2 py-3 border-b border-white/5">
+        <span className="text-xs text-gray-500 mr-2">Age Group:</span>
+        {AGE_BANDS.map(ab => (
+          <button key={ab} onClick={() => setAgeBand(ab)}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${ageBand===ab ? 'bg-shakti-600 text-white glow-pink scale-105' : 'bg-white/5 text-gray-400 hover:bg-white/10'}`}>
+            {ab}
+          </button>
+        ))}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
+            <div className="text-6xl mb-4">🪷</div>
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-shakti-400 to-violet-400 bg-clip-text text-transparent">Namaste! I'm Shakti</h2>
+            <p className="text-gray-400 mt-2 max-w-md text-sm">Your AI life companion across Health, Finance & Career. Ask me anything relevant to women in India.</p>
+            <div className="flex gap-3 mt-6">
+              {Object.entries(PILLAR_STYLES).map(([k,v]) => (
+                <div key={k} className={`${v.bg} ${v.text} border ${v.border} px-3 py-1.5 rounded-lg text-xs font-medium`}>{v.icon} {k}</div>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m, i) => <ChatMessage key={i} msg={m}/>)}
+        {thinkingSteps.length > 0 && <ThinkingIndicator steps={thinkingSteps}/>}
+        <div ref={endRef}/>
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-white/5 p-4">
+        <div className="flex gap-3 max-w-3xl mx-auto">
+          <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && sendMessage()}
+            placeholder="Ask about health, finance, or career..."
+            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-shakti-500/50 transition placeholder-gray-500"/>
+          <button onClick={sendMessage} disabled={loading || !input.trim()}
+            className="px-6 py-3 bg-gradient-to-r from-shakti-600 to-violet-600 rounded-xl font-semibold text-sm hover:opacity-90 transition disabled:opacity-30">
+            {loading ? '...' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// DASHBOARD VIEW
+// ═══════════════════════════════════════
+function DashboardView() {
+  const [data, setData] = useState(null);
+  const pillarChartRef = useRef(null);
+  const ageChartRef = useRef(null);
+  const latencyChartRef = useRef(null);
+  const chartsRef = useRef({});
+
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/metrics`);
+      setData(await res.json());
+    } catch(e) { console.error(e); }
+  }, []);
+
+  useEffect(() => { fetchMetrics(); const iv = setInterval(fetchMetrics, 5000); return () => clearInterval(iv); }, [fetchMetrics]);
+
+  useEffect(() => {
+    if (!data) return;
+    // Pillar Pie
+    if (pillarChartRef.current) {
+      if (chartsRef.current.pillar) chartsRef.current.pillar.destroy();
+      chartsRef.current.pillar = new Chart(pillarChartRef.current, {
+        type:'doughnut', data:{
+          labels:['Health','Finance','Career'],
+          datasets:[{ data:[data.pillar_split.HEALTH||0, data.pillar_split.FINANCE||0, data.pillar_split.CAREER||0],
+            backgroundColor:['#3b82f6','#10b981','#8b5cf6'], borderWidth:0 }]
+        }, options:{ plugins:{legend:{labels:{color:'#9ca3af',font:{size:11}}}}, cutout:'65%' }
+      });
+    }
+    // Age Pie
+    if (ageChartRef.current) {
+      if (chartsRef.current.age) chartsRef.current.age.destroy();
+      chartsRef.current.age = new Chart(ageChartRef.current, {
+        type:'doughnut', data:{
+          labels:['11-24','25-40','41+'],
+          datasets:[{ data:[data.age_band_split['11-24']||0, data.age_band_split['25-40']||0, data.age_band_split['41+']||0],
+            backgroundColor:['#f472b6','#fb923c','#a78bfa'], borderWidth:0 }]
+        }, options:{ plugins:{legend:{labels:{color:'#9ca3af',font:{size:11}}}}, cutout:'65%' }
+      });
+    }
+    // Latency Line
+    if (latencyChartRef.current) {
+      if (chartsRef.current.latency) chartsRef.current.latency.destroy();
+      const hist = data.latency_history || [];
+      chartsRef.current.latency = new Chart(latencyChartRef.current, {
+        type:'line', data:{
+          labels:hist.map((_,i) => i+1),
+          datasets:[{ label:'Latency (ms)', data:hist.map(h=>h.ms), borderColor:'#ec4899', backgroundColor:'rgba(236,72,153,0.1)', fill:true, tension:0.4, pointRadius:2 }]
+        }, options:{ scales:{ x:{ticks:{color:'#6b7280'},grid:{color:'rgba(255,255,255,0.03)'}}, y:{ticks:{color:'#6b7280'},grid:{color:'rgba(255,255,255,0.03)'}} }, plugins:{legend:{labels:{color:'#9ca3af'}}} }
+      });
+    }
+  }, [data]);
+
+  if (!data) return <div className="flex items-center justify-center h-[calc(100vh-72px)] text-gray-500">Loading metrics...</div>;
+
+  const cards = [
+    { label:'Total Sessions', value:data.total_sessions, icon:'📊', color:'text-shakti-400' },
+    { label:'Avg Latency', value:`${data.avg_latency_ms}ms`, icon:'⚡', color:'text-amber-400' },
+    { label:'Avg Cost/Session', value:`$${data.avg_cost_per_session}`, icon:'💵', color:'text-emerald-400' },
+    { label:'Hallucination Rate', value:`${(data.hallucination_rate*100).toFixed(1)}%`, icon:'🛡️', color:'text-blue-400' },
+  ];
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto space-y-6 overflow-y-auto h-[calc(100vh-72px)]">
+      <h2 className="text-xl font-bold text-gray-200">Dashboard</h2>
+      {/* Stat Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {cards.map((c,i) => (
+          <div key={i} className="glass rounded-xl p-4 hover:bg-surface-hover transition">
+            <div className="text-2xl mb-1">{c.icon}</div>
+            <div className={`text-2xl font-bold ${c.color}`}>{c.value}</div>
+            <div className="text-xs text-gray-500 mt-1">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      {/* Approval Gauge */}
+      <div className="glass rounded-xl p-4">
+        <div className="text-sm text-gray-400 mb-2">Approval Rate</div>
+        <div className="w-full bg-white/5 rounded-full h-4 overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-700" style={{width:`${(data.approval_rate*100)}%`}}></div>
+        </div>
+        <div className="text-right text-xs text-gray-500 mt-1">{(data.approval_rate*100).toFixed(0)}%</div>
+      </div>
+      {/* Charts */}
+      <div className="grid md:grid-cols-3 gap-4">
+        <div className="glass rounded-xl p-4"><div className="text-sm text-gray-400 mb-3">Pillar Distribution</div><canvas ref={pillarChartRef}></canvas></div>
+        <div className="glass rounded-xl p-4"><div className="text-sm text-gray-400 mb-3">Age Band Distribution</div><canvas ref={ageChartRef}></canvas></div>
+        <div className="glass rounded-xl p-4"><div className="text-sm text-gray-400 mb-3">Latency Over Time</div><canvas ref={latencyChartRef}></canvas></div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// TRACE VIEWER
+// ═══════════════════════════════════════
+function TraceView() {
+  const [sessions, setSessions] = useState([]);
+  const [expanded, setExpanded] = useState(null);
+  const [userId, setUserId] = useState('');
+
+  const fetchSessions = async (uid) => {
+    if (!uid) return;
+    try {
+      const res = await fetch(`${API}/sessions/${uid}`);
+      const data = await res.json();
+      setSessions(data.sessions || []);
+    } catch(e) { console.error(e); }
+  };
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto overflow-y-auto h-[calc(100vh-72px)]">
+      <h2 className="text-xl font-bold text-gray-200 mb-4">Trace Viewer</h2>
+      <div className="flex gap-3 mb-6">
+        <input value={userId} onChange={e=>setUserId(e.target.value)} placeholder="Enter user_id..."
+          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-shakti-500/50"/>
+        <button onClick={()=>fetchSessions(userId)} className="px-4 py-2 bg-shakti-600 rounded-lg text-sm font-medium hover:bg-shakti-500 transition">Load</button>
+      </div>
+      {sessions.length === 0 ? (
+        <div className="text-center text-gray-500 py-12">No sessions found. Enter a user ID and click Load.</div>
+      ) : (
+        <div className="space-y-2">
+          {sessions.slice(-10).reverse().map((s,i) => {
+            const ps = PILLAR_STYLES[s.pillar] || {};
+            return (
+              <div key={i} className="glass rounded-xl overflow-hidden">
+                <button onClick={()=>setExpanded(expanded===i?null:i)} className="w-full px-4 py-3 flex items-center gap-4 text-left hover:bg-white/5 transition">
+                  <span className="text-xs text-gray-500 font-mono w-16">{new Date(s.timestamp*1000).toLocaleTimeString()}</span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${ps.bg||''} ${ps.text||''}`}>{s.pillar||'—'}</span>
+                  <span className="text-xs text-gray-400">{s.age_band}</span>
+                  <span className="text-xs text-gray-500 flex-1 truncate">{s.response_preview}</span>
+                  <span className="text-xs text-amber-400">{s.latency_ms?.toFixed(0)}ms</span>
+                  <span className="text-xs">{s.citations_count||0} cites</span>
+                  <span className={`text-xs ${s.approved===true?'text-emerald-400':s.approved===false?'text-red-400':'text-gray-600'}`}>{s.approved===true?'✓':s.approved===false?'✕':'—'}</span>
+                </button>
+                {expanded===i && (
+                  <div className="px-4 pb-4 text-xs space-y-2 border-t border-white/5 pt-3 fade-in">
+                    <div><span className="text-gray-500">Session:</span> <span className="font-mono text-gray-300">{s.session_id}</span></div>
+                    <div><span className="text-gray-500">Query:</span> <span className="text-gray-300">{s.query || '—'}</span></div>
+                    <div><span className="text-gray-500">Response:</span> <span className="text-gray-300">{s.response_preview}</span></div>
+                    {s.trace_url && <a href={s.trace_url} target="_blank" rel="noopener" className="inline-block mt-1 text-shakti-400 hover:underline">View in Langfuse →</a>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// APP ROOT
+// ═══════════════════════════════════════
+function App() {
+  const [tab, setTab] = useState('chat');
+  const tabs = [
+    { id:'chat', label:'Chat', icon:'💬' },
+    { id:'dashboard', label:'Dashboard', icon:'📊' },
+    { id:'traces', label:'Traces', icon:'🔍' },
+  ];
+
+  return (
+    <div className="min-h-screen">
+      {/* Header */}
+      <header className="glass border-b border-white/5 sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto flex items-center justify-between px-4 h-[72px]">
+          <div className="flex items-center gap-3">
+            <span className="text-3xl">🪷</span>
+            <div>
+              <h1 className="text-lg font-bold bg-gradient-to-r from-shakti-400 via-pink-400 to-violet-400 bg-clip-text text-transparent leading-tight">ShaktiAgent</h1>
+              <p className="text-[10px] text-gray-500 tracking-wider uppercase">AI Life Companion for Women</p>
+            </div>
+          </div>
+          <nav className="flex gap-1">
+            {tabs.map(t => (
+              <button key={t.id} id={`nav-${t.id}`} onClick={()=>setTab(t.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab===t.id ? 'bg-shakti-600/20 text-shakti-300 border border-shakti-500/20' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}>
+                {t.icon} {t.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      {/* Views */}
+      {tab === 'chat' && <ChatView/>}
+      {tab === 'dashboard' && <DashboardView/>}
+      {tab === 'traces' && <TraceView/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
