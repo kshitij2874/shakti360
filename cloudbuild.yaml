@@ -1,5 +1,4 @@
 steps:
-  # Step 1: Build the container
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
@@ -9,11 +8,9 @@ steps:
       - 'asia-south1-docker.pkg.dev/$PROJECT_ID/shakti-repo/shakti-agent:latest'
       - '.'
 
-  # Step 2: Push both tags to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '--all-tags', 'asia-south1-docker.pkg.dev/$PROJECT_ID/shakti-repo/shakti-agent']
 
-  # Step 3: Deploy to Cloud Run
   - name: 'gcr.io/google.cloud-sdk/cloud-sdk'
     entrypoint: 'gcloud'
     args:
@@ -27,9 +24,6 @@ steps:
       - '--memory=2Gi'
       - '--cpu=2'
       - '--timeout=300'
-      - '--concurrency=80'
-      - '--min-instances=0'
-      - '--max-instances=3'
       - '--service-account=shakti-agent-sa@$PROJECT_ID.iam.gserviceaccount.com'
       - '--update-secrets=MAPS_API_KEY=MAPS_API_KEY:latest,LANGFUSE_PUBLIC_KEY=LANGFUSE_PUBLIC_KEY:latest,LANGFUSE_SECRET_KEY=LANGFUSE_SECRET_KEY:latest'
       - '--set-env-vars=PROJECT_ID=$PROJECT_ID,LOCATION=asia-south1,VERTEX_LOCATION=us-central1,GEMINI_MODEL=gemini-2.5-flash,LANGFUSE_HOST=https://cloud.langfuse.com,RAG_BUCKET=shakti360-rag,USE_MEDGEMMA=false'
