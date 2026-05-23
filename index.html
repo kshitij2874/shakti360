@@ -435,36 +435,209 @@ function FeedbackBar({ onFeedback }) {
   );
 }
 
-// ─── Approval Card ───
+// ─── Approval Card — friendly, no raw JSON ───
+const TOOL_LABELS = {
+  find_nearby_clinic: { icon:'🏥', name:'Find nearby clinics' },
+  find_nearby_police: { icon:'🚓', name:'Find nearby help & police' },
+  lookup_scheme:      { icon:'📋', name:'Look up a government scheme' },
+  calculate_sip:      { icon:'🧮', name:'Run a SIP calculation' },
+  get_helplines:      { icon:'📞', name:'Share helpline numbers' },
+};
+
 function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
   return (
-    <div className="rounded-xl p-4 my-3 fade-in" style={{background:'#fef9e7', border:'1px solid #f4c785'}}>
+    <div className="rounded-xl p-4 my-3 slide-up" style={{background:'#fef9e7', border:'1px solid #f4c785'}}>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-lg">⚠️</span>
-        <h4 className="font-semibold text-sm" style={{color:'#b8772b'}}>Action Approval Required</h4>
+        <span className="text-lg">🌸</span>
+        <h4 className="font-semibold text-sm" style={{color:'#b8772b'}}>Kalpana would like to help with:</h4>
       </div>
       <div className="space-y-2 mb-4">
-        {tools.map((t, i) => (
-          <div key={i} className="rounded-lg p-3 text-xs" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
-            <div className="font-mono" style={{color:'#b8772b'}}>{t.tool}({JSON.stringify(t.params)})</div>
-            <div className="mt-1" style={{color:'var(--kalpana-text-soft)'}}>{t.reason}</div>
-          </div>
-        ))}
+        {tools.map((t, i) => {
+          const meta = TOOL_LABELS[t.tool] || { icon:'✨', name: t.tool.replace(/_/g,' ') };
+          return (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+              <div className="font-medium" style={{color:'#b8772b'}}>{meta.icon} {meta.name}</div>
+              {t.reason && <div className="mt-1 text-xs" style={{color:'var(--kalpana-text-soft)'}}>{t.reason}</div>}
+            </div>
+          );
+        })}
       </div>
-      <div className="flex gap-3">
-        <button onClick={() => onApprove(sessionId)} className="kalpana-btn-primary flex-1 text-sm">✓ Approve</button>
-        <button onClick={() => onReject(sessionId)} className="kalpana-btn-secondary flex-1 text-sm">✕ Reject</button>
+      <div className="flex gap-2">
+        <button onClick={() => onApprove(sessionId)} className="kalpana-btn-primary flex-1 text-sm">Yes, go ahead</button>
+        <button onClick={() => onReject(sessionId)} className="kalpana-btn-secondary flex-1 text-sm">No thanks</button>
       </div>
     </div>
   );
 }
 
+// ─── Tool Result Card — pretty render of approved tool results ───
+function ToolResultCard({ results }) {
+  if (!results || results.length === 0) return null;
+  return (
+    <div className="rounded-xl p-4 my-2 slide-up" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
+      <div className="text-xs font-medium mb-3 font-heading" style={{color:'var(--kalpana-rose-700)'}}>✓ Here's what I found</div>
+      {results.map((r, i) => (
+        <ToolResultBlock key={i} tool={r.tool} result={r.result} />
+      ))}
+    </div>
+  );
+}
+
+function ToolResultBlock({ tool, result }) {
+  const meta = TOOL_LABELS[tool] || { icon:'✨', name: (tool||'').replace(/_/g,' ') };
+
+  // List of places (clinics / police)
+  if (Array.isArray(result)) {
+    return (
+      <div className="mb-2">
+        <div className="text-xs mb-2" style={{color:'var(--kalpana-text-soft)'}}>{meta.icon} {meta.name}</div>
+        <div className="space-y-2">
+          {result.slice(0, 5).map((p, i) => (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+              <div className="font-medium" style={{color:'var(--kalpana-text)'}}>{p.name || p.label || 'Place'}</div>
+              {p.address && <div className="text-xs mt-0.5" style={{color:'var(--kalpana-text-soft)'}}>{p.address}</div>}
+              <div className="flex gap-3 mt-1 text-xs" style={{color:'var(--kalpana-text-soft)'}}>
+                {p.rating && p.rating !== 'N/A' && <span>★ {p.rating}</span>}
+                {p.phone && <span>📞 {p.phone}</span>}
+                {p.open_now === true && <span style={{color:'#4a7a3f'}}>Open now</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Scheme lookup result
+  if (result && typeof result === 'object' && (result.found !== undefined || result.name)) {
+    if (result.found === false) {
+      return (
+        <div className="rounded-lg p-3 text-sm mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text-soft)'}}>
+          {result.message || 'No matching scheme found.'}
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-1" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} {result.name}</div>
+        {result.type && <div className="text-xs mb-2" style={{color:'var(--kalpana-text-soft)'}}>{result.type}</div>}
+        {result.eligibility && <div className="text-xs"><strong>Eligibility:</strong> {result.eligibility}</div>}
+        {result.benefit && <div className="text-xs mt-1"><strong>Benefit:</strong> {result.benefit}</div>}
+        {result.where && <div className="text-xs mt-1"><strong>Where:</strong> {result.where}</div>}
+        {result.url && (
+          <a href={result.url} target="_blank" rel="noopener" className="inline-block mt-2 text-xs hover:underline" style={{color:'var(--kalpana-rose-500)'}}>
+            Visit official page →
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  // SIP calculation result
+  if (result && typeof result === 'object' && result.estimated_maturity) {
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} SIP projection</div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Monthly SIP:</span> <strong>{result.monthly_sip}</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Duration:</span> <strong>{result.duration_years} years</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Annual return:</span> <strong>{result.annual_return}</strong></div>
+          <div><span style={{color:'var(--kalpana-text-soft)'}}>Total invested:</span> <strong>{result.total_invested}</strong></div>
+          <div className="col-span-2 pt-2 mt-1 border-t" style={{borderColor:'var(--kalpana-rose-100)'}}>
+            <span style={{color:'var(--kalpana-text-soft)'}}>Estimated maturity:</span> <strong style={{color:'var(--kalpana-rose-700)'}}>{result.estimated_maturity}</strong>
+          </div>
+          <div className="col-span-2 text-[11px] italic" style={{color:'var(--kalpana-text-soft)'}}>
+            Wealth gained: {result.wealth_gained}. Past performance isn't a guarantee.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Helplines dictionary
+  if (result && typeof result === 'object' && (result.women_helpline || result.emergency)) {
+    const lines = [
+      ["Women's Helpline", result.women_helpline],
+      ["Police", result.police],
+      ["Emergency", result.emergency],
+      ["Ambulance", result.ambulance],
+      ["Child Helpline", result.child_helpline],
+      ["Domestic Violence", result.domestic_violence],
+      ["Cyber Crime", result.cyber_crime],
+    ].filter(([_, v]) => !!v);
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Helpline numbers</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+          {lines.map(([k, v]) => (
+            <div key={k}><span style={{color:'var(--kalpana-text-soft)'}}>{k}:</span> <strong>{v}</strong></div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Error
+  if (result && typeof result === 'object' && result.error) {
+    return (
+      <div className="rounded-lg p-3 text-sm mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text-soft)'}}>
+        I couldn't complete that just now — try again in a moment.
+      </div>
+    );
+  }
+
+  // Generic object — last-resort friendly text, NEVER raw JSON
+  return (
+    <div className="rounded-lg p-3 text-sm mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text-soft)'}}>
+      Done. Let me know if you'd like more detail.
+    </div>
+  );
+}
+
 // ─── Chat Message ───
-function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback }) {
+function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, onUpload, onSkipUpload }) {
   const isUser = msg.role === 'user';
   const pillar = PILLAR_STYLES[msg.pillar] || {};
   const isClarifying = !isUser && msg.type === 'clarifying_question';
   const isAnswer = !isUser && (!msg.type || msg.type === 'answer');
+  const isToolResult = !isUser && msg.type === 'tool_result';
+  const isSystemNote = !isUser && msg.type === 'system_note';
+  const isAttachmentAck = !isUser && msg.type === 'attachment_ack';
+
+  // Tool result renders as a standalone card (no bubble wrapper)
+  if (isToolResult) {
+    return (
+      <div className="flex justify-start slide-up">
+        <div className="max-w-[90%]">
+          <ToolResultCard results={msg.tool_results}/>
+        </div>
+      </div>
+    );
+  }
+
+  // System notes get a small italic line, no avatar
+  if (isSystemNote) {
+    return (
+      <div className="flex justify-center slide-up">
+        <div className="text-xs italic py-1" style={{color:'var(--kalpana-text-soft)'}}>{msg.content}</div>
+      </div>
+    );
+  }
+
+  // Attachment acknowledgement (user side)
+  if (isAttachmentAck) {
+    return (
+      <div className="flex justify-end slide-up">
+        <div className="kalpana-bubble-user flex items-center gap-2">
+          <span>📎</span>
+          <span className="text-sm">{msg.content || `Shared ${msg.filename || 'a document'}`}</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Detect a clarifying question that's asking for a document/report (Bug 2)
+  const asksForDoc = isClarifying && msg.is_doc_request;
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} slide-up`}>
@@ -482,13 +655,33 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback }
             {pillar.icon} {pillar.label || msg.pillar}
           </div>
         )}
-        {/* Full answer text — whitespace-pre-wrap, never truncated */}
         <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{wordBreak:'break-word'}}>
           {msg.content}
         </div>
 
-        {/* Quick reply pills for yes/no clarifying questions, only on the latest */}
-        {isClarifying && isLatest && msg.is_yes_no && onQuickReply && (
+        {/* DOC REQUEST clarifying question: show upload + skip, hide yes/no pills */}
+        {asksForDoc && isLatest && onUpload && (
+          <div className="flex gap-2 mt-3 flex-wrap items-center">
+            <label className="kalpana-btn-secondary text-xs py-1.5 px-3 cursor-pointer inline-flex items-center gap-1.5">
+              📎 Upload file
+              <input type="file" className="hidden"
+                accept="image/*,.pdf,.doc,.docx"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onUpload(file);
+                  e.target.value = '';
+                }}/>
+            </label>
+            <button onClick={() => onSkipUpload && onSkipUpload()}
+              className="text-xs py-1.5 px-3 rounded-xl transition"
+              style={{color:'var(--kalpana-text-soft)', background:'transparent', border:'1px dashed var(--kalpana-rose-100)'}}>
+              Skip — I'll share later
+            </button>
+          </div>
+        )}
+
+        {/* Quick reply pills for yes/no clarifying questions (when NOT a doc request) */}
+        {isClarifying && !asksForDoc && isLatest && msg.is_yes_no && onQuickReply && (
           <div className="flex gap-2 mt-3 flex-wrap">
             <button onClick={() => onQuickReply('Yes')} className="kalpana-btn-secondary text-xs py-1.5 px-3">Yes</button>
             <button onClick={() => onQuickReply('No')} className="kalpana-btn-secondary text-xs py-1.5 px-3">No</button>
@@ -496,7 +689,7 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback }
           </div>
         )}
         {/* Skip button for open-ended clarifying questions */}
-        {isClarifying && isLatest && !msg.is_yes_no && onQuickReply && (
+        {isClarifying && !asksForDoc && isLatest && !msg.is_yes_no && onQuickReply && (
           <div className="flex gap-2 mt-3">
             <button onClick={() => onQuickReply('Skip')} className="text-xs py-1.5 px-3 rounded-xl transition" style={{color:'var(--kalpana-text-soft)', background:'transparent', border:'1px dashed var(--kalpana-rose-100)'}}>Skip this</button>
           </div>
@@ -510,6 +703,11 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback }
             <NextStepsCards steps={msg.next_steps} onPick={(s) => onPickNextStep && onPickNextStep(s)}/>
             {msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
               <ApprovalCard tools={msg.tools_to_call} sessionId={msg.session_id} onApprove={msg.onApprove} onReject={msg.onReject}/>
+            )}
+            {msg.approval_resolved && (
+              <div className="text-xs italic mt-3" style={{color:'var(--kalpana-text-soft)'}}>
+                {msg.approval_resolved === 'approved' ? '✓ Going ahead with this' : '✕ Skipped'}
+              </div>
             )}
             {msg.latency_ms && (
               <div className="text-[10px] mt-3" style={{color:'var(--kalpana-text-soft)'}}>{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
@@ -861,11 +1059,90 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     inputRef.current?.focus();
   };
 
-  const handlePickNextStep = (step) => {
-    // Send the suggestion's label as the user's next message — this starts
-    // a fresh clarifying flow for the new topic.
+  const handlePickNextStep = async (step) => {
     if (!step || !step.label) return;
-    submitValue(step.label);
+
+    // Show the user's tap as a message
+    setMessages(prev => [...prev, { role:'user', content: step.label }]);
+    setShowGreeting(false);
+    setLoading(true);
+
+    // ── TOOL_CALL action: execute the tool directly, render clean result ──
+    if (step.action_type === 'tool_call' && step.tool_or_context) {
+      setThinkingSteps([{ step:'tool', detail:`Running ${step.tool_or_context.replace(/_/g,' ')}...` }]);
+      try {
+        const res = await fetch(`${API}/tool/execute`, {
+          method:'POST',
+          headers: authHeaders,
+          body: JSON.stringify({ tool: step.tool_or_context, params: {} }),
+        });
+        const data = await res.json();
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          type: 'tool_result',
+          content: '',
+          tool_results: [{ tool: step.tool_or_context, result: data }],
+        }]);
+      } catch (e) {
+        console.error('Tool execution failed:', e);
+        setMessages(prev => [...prev, {
+          role:'assistant', type:'system_note',
+          content:"I couldn't run that just now. Want to try again?"
+        }]);
+      }
+      setThinkingSteps([]);
+      setLoading(false);
+      return;
+    }
+
+    // ── AGENT_CONTINUE action: send as a follow-up (orchestrator detects followup) ──
+    // Just call /chat — the follow-up detector will skip re-clarifying.
+    setThinkingSteps([{ step:'thinking', detail:'Kalpana is thinking...' }]);
+    try {
+      const res = await fetch(`${API}/chat`, {
+        method:'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          user_id: userId,
+          age_band: ageBand,
+          query: step.label,
+          session_id: sessionId,
+        }),
+      });
+      const data = await res.json();
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          role:'assistant',
+          type: data.type || 'answer',
+          content: data.response,
+          pillar: data.pillar,
+          citations: data.citations,
+          citation_chips: data.citation_chips,
+          next_steps: data.next_steps,
+          tools_to_call: data.tools_to_call,
+          awaiting_approval: data.awaiting_approval,
+          session_id: data.session_id,
+          latency_ms: data.latency_ms,
+          from_cache: data.from_cache,
+          is_yes_no: data.is_yes_no,
+          is_doc_request: data.is_doc_request,
+          question_index: data.question_index,
+          questions_total: data.questions_total,
+          onApprove: handleApprove,
+          onReject: handleReject,
+        }]);
+        setThinkingSteps([]);
+        setLoading(false);
+      }, 400);
+    } catch (e) {
+      console.error('Follow-up failed:', e);
+      setMessages(prev => [...prev, {
+        role:'assistant', type:'system_note',
+        content:"Something went wrong. Want to rephrase?"
+      }]);
+      setThinkingSteps([]);
+      setLoading(false);
+    }
   };
 
   const handleFeedback = (msg, value) => {
@@ -916,14 +1193,40 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     try {
       const res = await fetch(`${API}/approve`, { method:'POST', headers:authHeaders, body:JSON.stringify({session_id:sid}) });
       const data = await res.json();
-      setMessages(prev => [...prev, { role:'assistant', content:'✅ Tools executed successfully:\n\n' + JSON.stringify(data.tool_results, null, 2), pillar:'' }]);
-    } catch(e) { console.error(e); }
+      // Mark the original approval card as resolved so the buttons disappear
+      setMessages(prev => prev.map(m =>
+        (m.session_id === sid && m.awaiting_approval)
+          ? { ...m, awaiting_approval: false, approval_resolved: 'approved' }
+          : m
+      ));
+      // Render the tool results as a structured card (no raw JSON)
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        type: 'tool_result',
+        content: '',
+        tool_results: data.tool_results || [],
+      }]);
+    } catch(e) {
+      console.error(e);
+      setMessages(prev => [...prev, {
+        role:'assistant', type:'system_note',
+        content:"I couldn't complete that just now. Want to try again?"
+      }]);
+    }
   };
 
   const handleReject = async (sid) => {
     try {
       await fetch(`${API}/reject`, { method:'POST', headers:authHeaders, body:JSON.stringify({session_id:sid}) });
-      setMessages(prev => [...prev, { role:'assistant', content:'❌ Tool execution was rejected. How else can I help?', pillar:'' }]);
+      setMessages(prev => prev.map(m =>
+        (m.session_id === sid && m.awaiting_approval)
+          ? { ...m, awaiting_approval: false, approval_resolved: 'rejected' }
+          : m
+      ));
+      setMessages(prev => [...prev, {
+        role:'assistant', type:'system_note',
+        content:'No problem. How else can I help?'
+      }]);
     } catch(e) { console.error(e); }
   };
 
@@ -964,6 +1267,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           from_cache: data.from_cache,
           // clarifying-question fields
           is_yes_no: data.is_yes_no,
+          is_doc_request: data.is_doc_request,
           question_index: data.question_index,
           questions_total: data.questions_total,
           onApprove: handleApprove,
@@ -979,6 +1283,93 @@ function ChatView({ idToken, user, onResetOnboarding }) {
   };
 
   const sendMessage = async () => submitValue(input);
+
+  // ── Document upload handler for clarifying doc-requests ──
+  const handleUpload = async (file) => {
+    if (!file || loading) return;
+
+    // Optimistic: show the user's attachment bubble immediately
+    setMessages(prev => [...prev, {
+      role: 'user', type: 'attachment_ack',
+      content: `Shared ${file.name}`,
+      filename: file.name,
+    }]);
+    setLoading(true);
+    setThinkingSteps([{ step:'uploading', detail:'Receiving your document...' }]);
+
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('session_id', sessionId);
+      const res = await fetch(`${API}/attachments/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${idToken}` },
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Upload failed (${res.status})`);
+      }
+      const data = await res.json();
+
+      // Kalpana acknowledges receipt
+      setMessages(prev => [...prev, {
+        role: 'assistant', type: 'system_note',
+        content: data.ack || `Got it. Thanks for sharing ${data.filename || 'this'}.`,
+      }]);
+
+      // Backend already advanced the clarifying state and returned the next
+      // question (or the final answer) in data.next — render it directly.
+      const nxt = data.next;
+      if (nxt && nxt.type === 'clarifying_question') {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          type: 'clarifying_question',
+          content: nxt.response,
+          question: nxt.question,
+          is_yes_no: nxt.is_yes_no,
+          is_doc_request: nxt.is_doc_request,
+          question_index: nxt.question_index,
+          questions_total: nxt.questions_total,
+          pillar: nxt.pillar,
+          session_id: nxt.session_id,
+        }]);
+      } else if (nxt && nxt.type === 'answer') {
+        // Clarifying complete — show the final answer
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          type: 'answer',
+          content: nxt.response,
+          pillar: nxt.pillar,
+          citations: nxt.citations,
+          citation_chips: nxt.citation_chips,
+          next_steps: nxt.next_steps,
+          tools_to_call: nxt.tools_to_call,
+          awaiting_approval: nxt.awaiting_approval,
+          session_id: nxt.session_id,
+          latency_ms: nxt.latency_ms,
+          from_cache: nxt.from_cache,
+          onApprove: handleApprove,
+          onReject: handleReject,
+        }]);
+      }
+    } catch (e) {
+      console.error('Upload failed:', e);
+      setMessages(prev => [...prev, {
+        role: 'assistant', type: 'system_note',
+        content: e.message?.includes('size') || e.message?.includes('large')
+          ? "That file is a bit too large — could you try one under 10 MB?"
+          : "I couldn't receive that just now. Want to type your answer instead?",
+      }]);
+    } finally {
+      setThinkingSteps([]);
+      setLoading(false);
+    }
+  };
+
+  const handleSkipUpload = () => {
+    submitValue("I'll share later");
+  };
 
   if (!profileLoaded) {
     return (
@@ -1063,6 +1454,8 @@ function ChatView({ idToken, user, onResetOnboarding }) {
             onQuickReply={submitValue}
             onPickNextStep={handlePickNextStep}
             onFeedback={handleFeedback}
+            onUpload={handleUpload}
+            onSkipUpload={handleSkipUpload}
           />
         ))}
         {thinkingSteps.length > 0 && (

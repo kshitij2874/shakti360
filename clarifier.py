@@ -94,6 +94,30 @@ def is_yes_no(question: str) -> bool:
     return any(q.startswith(h) for h in _YES_NO_HINTS)
 
 
+# ── Doc-request detection — UI shows an upload affordance instead of yes/no pills ──
+_DOC_PATTERNS = (
+    "report", "reports", "prescription", "prescriptions", "scan", "scans",
+    "x-ray", "xray", "mri", "ultrasound", "lab result", "blood test",
+    "bank statement", "salary slip", "payslip", "itr", "tax return", "resume",
+    "cv", "marksheet", "certificate", "document", "documents", "share",
+)
+
+
+def is_doc_request(question: str) -> bool:
+    """Does this clarifying question explicitly ask the user to share a document?"""
+    q = (question or "").lower()
+    if not q:
+        return False
+    if "share" in q and any(d in q for d in _DOC_PATTERNS):
+        return True
+    if "upload" in q:
+        return True
+    if any(p in q for p in ("recent report", "any report", "any prescription", "recent prescription",
+                            "any document", "any scan", "lab result", "blood test")):
+        return True
+    return False
+
+
 def get_clarifying_questions(pillar: str, age_band: str, query: str = "") -> list[str]:
     """Return up to 3 clarifying questions for this pillar + age band."""
     pillar = (pillar or "").upper()

@@ -18,6 +18,7 @@ from cache import get_cached_response, set_cached_response
 from clarifier import (
     get_clarifying_questions,
     is_yes_no,
+    is_doc_request,
     build_clarification_context,
     opening_kalpana_line,
     filter_already_answered,
@@ -249,6 +250,7 @@ async def process_query(
             "kalpana_says": opener,
             "question": first_q,
             "is_yes_no": is_yes_no(first_q),
+            "is_doc_request": is_doc_request(first_q),
             "question_index": 0,
             "questions_total": len(clarifying_qs),
             "pillar": intent,
@@ -294,6 +296,7 @@ async def process_query(
                 "response": next_q,
                 "question": next_q,
                 "is_yes_no": is_yes_no(next_q),
+                "is_doc_request": is_doc_request(next_q),
                 "question_index": new_idx,
                 "questions_total": len(clarifying_qs),
                 "pillar": state.get("pillar"),

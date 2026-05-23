@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -406,6 +406,162 @@ async def onboarding_reset(user: dict = Depends(verify_token)):
 async def greeting(user: dict = Depends(verify_token)):
     """Return a personalized greeting for the returning user."""
     result = await generate_greeting(user["uid"])
+    return JSONResponse(content=result)
+
+
+# ═══════════════════════════════════════════════════════
+# ATTACHMENT UPLOAD
+# ═══════════════════════════════════════════════════════
+
+# Caps to keep things safe
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB
+_ALLOWED_MIME = {
+    "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+}
+
+
+@app.post("/attachments/upload")
+async def upload_attachment(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    user: dict = Depends(verify_token),
+):
+    """Accept a user file, store in GCS (if available), return a friendly ack.
+
+    The file content is intentionally NOT parsed or sent to any LLM.
+    Kalpana just acknowledges receipt so the user feels heard and can continue.
+    """
+    user_id = user["uid"]
+    safe_name = (file.filename or "attachment").replace("/", "_").replace("\\", "_")[:120]
+
+    # Enforce size + mime
+    content = await file.read()
+    size = len(content)
+    if size > _MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large. Please keep it under 10 MB.")
+    mime = file.content_type or "application/octet-stream"
+    if mime not in _ALLOWED_MIME:
+        raise HTTPException(415, f"Unsupported file type: {mime}. Please share an image, PDF, or Word doc.")
+
+    # Try GCS upload (best-effort)
+    gs_uri = None
+    bucket_name = os.getenv("ATTACHMENTS_BUCKET") or f"{os.getenv('PROJECT_ID', 'shakti360')}-attachments"
+    try:
+        from google.cloud import storage  # type: ignore
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        # Don't error if bucket missing — just skip
+        if bucket.exists():
+            blob_path = f"user_attachments/{user_id}/{session_id}/{int(time.time())}_{safe_name}"
+            blob = bucket.blob(blob_path)
+            blob.upload_from_string(content, content_type=mime)
+            gs_uri = f"gs://{bucket_name}/{blob_path}"
+            logger.info(f"Attachment uploaded: {gs_uri} ({size} bytes)")
+        else:
+            logger.warning(f"Attachment bucket '{bucket_name}' does not exist; skipping GCS upload.")
+    except Exception as e:
+        logger.warning(f"GCS upload failed (continuing without persistence): {e}")
+
+    # Record metadata on the session doc (non-blocking, best-effort)
+    try:
+        from google.cloud import firestore as gcloud_firestore  # type: ignore
+        db = gcloud_firestore.Client()
+        db.collection("sessions").document(session_id).set({
+            "user_id": user_id,
+            "attachments": gcloud_firestore.ArrayUnion([{
+                "filename": safe_name,
+                "mime": mime,
+                "size": size,
+                "gs_uri": gs_uri,
+                "uploaded_at": time.time(),
+            }]),
+        }, merge=True)
+    except Exception as e:
+        logger.warning(f"Session attachment metadata write failed: {e}")
+
+    # If we're in a clarifying flow, advance it AND return the next question
+    # in the same response so the frontend doesn't need an extra /chat call.
+    advance_result = None
+    try:
+        from orchestrator import (
+            _get_session_state, _set_session_state, _generate_full_answer
+        )
+        state = _get_session_state(session_id)
+        if state and state.get("phase") == "clarifying":
+            qs = state.get("clarifying_questions", [])
+            idx = state.get("asked_index", 0)
+            qa_pairs = list(state.get("qa_pairs", []))
+            if idx < len(qs):
+                qa_pairs.append({
+                    "q": qs[idx],
+                    "a": f"[User shared a document: {safe_name}]",
+                })
+            new_idx = idx + 1
+
+            if new_idx < len(qs):
+                # More clarifying questions remain
+                next_q = qs[new_idx]
+                _set_session_state(session_id, {
+                    **state, "qa_pairs": qa_pairs, "asked_index": new_idx,
+                })
+                from clarifier import is_yes_no as _iyn, is_doc_request as _idr
+                advance_result = {
+                    "type": "clarifying_question",
+                    "response": next_q,
+                    "question": next_q,
+                    "is_yes_no": _iyn(next_q),
+                    "is_doc_request": _idr(next_q),
+                    "question_index": new_idx,
+                    "questions_total": len(qs),
+                    "pillar": state.get("pillar"),
+                    "session_id": session_id,
+                }
+            else:
+                # All clarifying questions answered — generate the real answer now
+                _set_session_state(session_id, {
+                    **state, "qa_pairs": qa_pairs, "phase": "answering",
+                })
+                advance_result = await _generate_full_answer(
+                    user_id=user_id,
+                    age_band=state.get("age_band") or "25-40",
+                    query=state.get("original_query", ""),
+                    pillar=state.get("pillar"),
+                    qa_pairs=qa_pairs,
+                    session_id=session_id,
+                    start_time=time.time(),
+                )
+    except Exception as e:
+        logger.warning(f"Could not advance clarifying state after upload: {e}")
+
+    return JSONResponse(content={
+        "ok": True,
+        "filename": safe_name,
+        "size": size,
+        "mime": mime,
+        "gs_uri": gs_uri,
+        "ack": (
+            f"Got it \u2014 I've received {safe_name}. Thanks for trusting me with this."
+        ),
+        "next": advance_result,
+    })
+
+
+# ═══════════════════════════════════════════════════════
+# DIRECT TOOL EXECUTION (for next-step action cards)
+# ═══════════════════════════════════════════════════════
+
+class ToolExecuteRequest(BaseModel):
+    tool: str
+    params: dict[str, Any] = {}
+
+@app.post("/tool/execute")
+async def tool_execute(req: ToolExecuteRequest, user: dict = Depends(verify_token)):
+    """Execute a tool directly and return its result. Used by next-step action cards."""
+    result = await execute_tool(req.tool, req.params)
     return JSONResponse(content=result)
 
 
