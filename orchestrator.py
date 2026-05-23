@@ -121,7 +121,24 @@ async def classify_intent(query: str) -> str:
 
     intent = max(scores, key=scores.get)  # type: ignore
     if scores[intent] == 0:
-        intent = "HEALTH"  # Default
+        # No keywords matched — use LLM to classify instead of defaulting to HEALTH
+        try:
+            from clarifier import _call_gemini as _gemini
+            prompt = (
+                "Classify this user query into EXACTLY one word: HEALTH, FINANCE, or CAREER.\n"
+                "HEALTH = medical, body, symptoms, pregnancy, mental health, clinics\n"
+                "FINANCE = money, savings, investments, schemes, insurance, tax\n"
+                "CAREER = jobs, skills, education, scholarships, business, work\n\n"
+                f"Query: \"{query}\"\n\n"
+                "Reply with ONLY one word:"
+            )
+            raw = (await _gemini(prompt, max_tokens=5, temperature=0.0)).strip().upper()
+            if raw in ("HEALTH", "FINANCE", "CAREER"):
+                return raw
+        except Exception:
+            pass
+        # If LLM also fails, default to CAREER (most general) instead of HEALTH
+        intent = "CAREER"
     return intent
 
 

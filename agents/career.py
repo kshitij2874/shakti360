@@ -65,14 +65,16 @@ async def run(
     citation_chips = structured["citations"]
     next_steps = structured["next_steps"]
 
-    # 4. Detect tool calls (rule-based)
+    # 4. Detect tool calls (conservative — only on EXPLICIT requests)
     tools_to_call: list[dict[str, Any]] = []
     query_lower = query.lower()
+    
+    # Scheme lookup — only when user explicitly names a scheme
     scheme_keywords = {
-        "pragati": "pragati", "scholarship": "pragati",
-        "pmkvy": "pmkvy", "skill": "pmkvy",
-        "mudra": "mudra", "business loan": "mudra",
-        "standup": "standup", "startup": "standup",
+        "pragati scholarship": "pragati", "aicte pragati": "pragati",
+        "pmkvy scheme": "pmkvy", "kaushal vikas": "pmkvy",
+        "mudra loan": "mudra", "mudra yojana": "mudra",
+        "stand up india": "standup", "standup india": "standup",
     }
     for keyword, scheme_key in scheme_keywords.items():
         if keyword in query_lower:
@@ -83,8 +85,8 @@ async def run(
             })
             break
     
-    # Job search tool - when user asks about finding jobs, job listings, opportunities
-    if any(w in query_lower for w in ["find jobs", "job listings", "job openings", "job search", "looking for work", "employment opportunities", "hiring", "vacancies"]):
+    # Job search — only when user explicitly asks to find jobs
+    if any(phrase in query_lower for phrase in ["find jobs", "search jobs", "job listings", "job openings", "looking for jobs", "job search"]):
         # Extract job type from query
         job_type = "software"  # default
         if any(w in query_lower for w in ["data", "analytics", "machine learning", "ai"]):
@@ -99,20 +101,19 @@ async def run(
         tools_to_call.append({
             "tool": "search_jobs_web",
             "params": {"query": job_type, "location": "India", "num_results": 5},
-            "reason": "User is looking for job opportunities.",
+            "reason": "User is explicitly looking for job opportunities.",
         })
     
-    # Scheme eligibility checker - when user asks what programs they qualify for
-    if any(w in query_lower for w in ["eligible", "qualify", "which programs", "what programs", "benefits available"]):
+    # Scheme eligibility — only when user explicitly asks
+    if any(phrase in query_lower for phrase in ["which programs am i eligible", "what programs do i qualify", "program eligibility", "career program eligibility"]):
         tools_to_call.append({
             "tool": "check_scheme_eligibility",
             "params": {"user_profile": {}, "scheme_type": "career"},
-            "reason": "User is asking about career program eligibility.",
+            "reason": "User is explicitly asking about career program eligibility.",
         })
     
-    # Tavily web search - when query needs up-to-date career/job market information
-    # Triggers on: latest trends, current market, recent opportunities, news, updates
-    if any(w in query_lower for w in ["latest", "recent", "current", "trend", "market", "demand", "salary", "hiring", "layoff", "remote", "hybrid", "news", "update", "industry"]):
+    # Tavily web search — ONLY when user explicitly asks for latest/current info
+    if any(phrase in query_lower for phrase in ["latest job market", "current job trends", "salary trends", "hiring trends", "industry trends"]):
         tools_to_call.append({
             "tool": "tavily_search_career",
             "params": {"query": query, "max_results": 5},

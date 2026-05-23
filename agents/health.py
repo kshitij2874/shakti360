@@ -78,54 +78,55 @@ async def run(
     citation_chips = structured["citations"]
     next_steps = structured["next_steps"]
 
-    # 4. Detect if tool calls are needed (cheap rule-based)
+    # 4. Detect if tool calls are needed (conservative — only on EXPLICIT requests)
     tools_to_call: list[dict[str, Any]] = []
     query_lower = query.lower()
-    if any(w in query_lower for w in ["clinic", "hospital", "doctor near", "nearby"]):
+    
+    # Only add tools when user EXPLICITLY asks for them
+    if any(phrase in query_lower for phrase in ["find clinic", "find hospital", "clinic near", "hospital near", "doctor near me", "nearby clinic", "nearby hospital"]):
         tools_to_call.append({
             "tool": "find_nearby_clinic",
             "params": {},
-            "reason": "User is looking for nearby healthcare facilities.",
+            "reason": "User is explicitly looking for nearby healthcare facilities.",
         })
-    if any(w in query_lower for w in ["police", "safety", "violence", "harassment"]):
+    if any(phrase in query_lower for phrase in ["find police", "police near", "police station near", "need help", "emergency help"]):
         tools_to_call.append({
             "tool": "find_nearby_police",
             "params": {},
-            "reason": "User may need safety assistance.",
+            "reason": "User explicitly needs safety assistance.",
         })
-    scheme_keywords = ["jsy", "janani", "pmjay", "ayushman", "pmmvy", "maternity scheme"]
+    scheme_keywords = ["jsy", "janani suraksha", "pmjay", "ayushman bharat", "pmmvy", "matru vandana"]
     for kw in scheme_keywords:
         if kw in query_lower:
             tools_to_call.append({
                 "tool": "lookup_scheme",
-                "params": {"keyword": kw},
+                "params": {"keyword": kw.split()[0]},
                 "reason": f"User asked about government scheme: {kw}",
             })
             break
     
-    # Health assessment tool - when user describes symptoms or asks for health check
-    if any(w in query_lower for w in ["symptom", "health check", "risk assessment", "health assessment", "am i at risk", "health risk"]):
+    # Health assessment — only when user explicitly asks for it
+    if any(phrase in query_lower for phrase in ["health risk assessment", "assess my health", "health check up", "am i at risk"]):
         tools_to_call.append({
             "tool": "assess_health_risk",
             "params": {"age": 25, "gender": "female", "symptoms": [], "conditions": [], "lifestyle": {}},
-            "reason": "User is asking for a health risk assessment.",
+            "reason": "User is explicitly asking for a health risk assessment.",
         })
     
-    # Mental wellbeing tool - when user expresses stress, anxiety, mood concerns
-    if any(w in query_lower for w in ["stress", "anxious", "depressed", "mood", "mental health", "wellbeing", "overwhelmed", "burnout"]):
+    # Mental wellbeing — only when user explicitly expresses these concerns
+    if any(phrase in query_lower for phrase in ["i feel stressed", "i am anxious", "i am depressed", "mental health help", "i feel overwhelmed", "burnout"]):
         tools_to_call.append({
             "tool": "mental_wellbeing_check",
             "params": {"mood": "neutral", "stress_level": "moderate", "sleep_quality": "fair", "social_support": "moderate", "recent_changes": []},
-            "reason": "User is expressing mental health concerns.",
+            "reason": "User is explicitly expressing mental health concerns.",
         })
     
-    # Tavily web search - when query needs up-to-date health information
-    # Triggers on: latest research, new treatments, recent findings, current statistics
-    if any(w in query_lower for w in ["latest", "recent", "new treatment", "research", "study", "statistics", "current", "update", "news", "vaccine", "outbreak", "pandemic"]):
+    # Tavily web search — ONLY when user explicitly asks for latest/current info
+    if any(phrase in query_lower for phrase in ["latest research on", "latest studies on", "current outbreak", "current pandemic", "new vaccine for", "recent medical breakthrough"]):
         tools_to_call.append({
             "tool": "tavily_search_health",
             "params": {"query": query, "max_results": 5},
-            "reason": "Query needs up-to-date health information that may not be in RAG.",
+            "reason": "User explicitly asks for up-to-date health research.",
         })
 
     # 5. Extract legacy citation strings (for validators) from RAG sources

@@ -66,10 +66,12 @@ async def run(
     citation_chips = structured["citations"]
     next_steps = structured["next_steps"]
 
-    # 4. Detect tool calls (rule-based)
+    # 4. Detect tool calls (conservative — only on EXPLICIT requests)
     tools_to_call: list[dict[str, Any]] = []
     query_lower = query.lower()
-    if any(w in query_lower for w in ["sip calculat", "how much will", "returns on sip", "calculate sip"]):
+    
+    # SIP calculator — only when user explicitly asks to calculate
+    if any(phrase in query_lower for phrase in ["calculate sip", "sip calculator", "sip returns", "how much will my sip"]):
         import re
         amounts = re.findall(r'\u20b9?\s*(\d+[,\d]*)', query)
         monthly = float(amounts[0].replace(",", "")) if amounts else 5000.0
@@ -81,13 +83,14 @@ async def run(
             "reason": f"Calculate SIP returns for \u20b9{monthly:,.0f}/month over {years} years.",
         })
 
+    # Scheme lookup — only when user explicitly names a scheme
     scheme_keywords = {
-        "sukanya": "sukanya", "samriddhi": "sukanya",
-        "scss": "scss", "senior citizen": "scss",
-        "nps": "nps", "pension": "nps",
-        "mudra": "mudra", "loan": "mudra",
-        "standup": "standup", "stand up": "standup",
-        "apy": "apy", "atal pension": "apy",
+        "sukanya samriddhi": "sukanya", "sukanya yojana": "sukanya",
+        "senior citizen savings": "scss", "scss scheme": "scss",
+        "national pension": "nps", "nps scheme": "nps",
+        "mudra loan": "mudra", "mudra yojana": "mudra",
+        "stand up india": "standup", "standup india": "standup",
+        "atal pension": "apy", "apy scheme": "apy",
     }
     for keyword, scheme_key in scheme_keywords.items():
         if keyword in query_lower:
@@ -98,28 +101,29 @@ async def run(
             })
             break
     
-    # Budget analysis tool - when user asks about budget, spending, expenses
-    if any(w in query_lower for w in ["budget", "spending", "expenses", "where does my money go", "track expenses", "financial health"]):
+    # Budget analysis — only when user explicitly asks for it
+    if any(phrase in query_lower for phrase in ["analyze my budget", "budget analysis", "where does my money go", "track my expenses", "spending analysis"]):
         tools_to_call.append({
             "tool": "analyze_budget",
             "params": {"monthly_income": 50000, "expenses": {}, "savings_goal": None},
-            "reason": "User is asking for budget analysis and spending insights.",
+            "reason": "User is explicitly asking for budget analysis.",
         })
     
-    # Scheme eligibility checker - when user asks what schemes they qualify for
-    if any(w in query_lower for w in ["eligible", "qualify", "which schemes", "what schemes", "benefits available"]):
+    # Scheme eligibility — only when user explicitly asks
+    if any(phrase in query_lower for phrase in ["which schemes am i eligible", "what schemes do i qualify", "eligible for which schemes", "scheme eligibility"]):
         tools_to_call.append({
             "tool": "check_scheme_eligibility",
             "params": {"user_profile": {}, "scheme_type": "all"},
-            "reason": "User is asking about scheme eligibility.",
+            "reason": "User is explicitly asking about scheme eligibility.",
         })
     
-    # Tavily web search - when query needs up-to-date financial information
-    # Triggers on: latest rates, current market, recent changes, news, updates
-    if any(w in query_lower for w in ["latest", "recent", "current rate", "market", "stock", "mutual fund", "interest rate", "inflation", "budget", "tax", "news", "update", "rbi", "sebi"]):
+    # Tavily web search — ONLY when user explicitly asks for latest/current info
+    if any(phrase in query_lower for phrase in ["latest interest rate", "current interest rate", "latest market update", "stock market today", "rbi announcement", "sebi circular"]):
         tools_to_call.append({
             "tool": "tavily_search_finance",
             "params": {"query": query, "max_results": 5},
+            "reason": "User explicitly asks for up-to-date financial information.",
+        })
             "reason": "Query needs up-to-date financial information that may not be in RAG.",
         })
 
