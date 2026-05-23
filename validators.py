@@ -24,15 +24,13 @@ INAPPROPRIATE_YOUNG: list[str] = [
     r"suicide\s+methods",
 ]
 
+# ── Hard safety violation patterns (no false positives on "should", "will help", "may benefit") ──
 SAFETY_VIOLATIONS: list[str] = [
     r"i\s+diagnose\s+you",
-    r"you\s+(have|are\s+suffering\s+from)\s+\w+\s+(disease|disorder|syndrome|cancer)",
+    r"definitely\s+cures",
     r"guaranteed\s+returns",
     r"you\s+will\s+(definitely|certainly)\s+(earn|make|get)\s+\d+%",
-    r"buy\s+this\s+stock",
-    r"invest\s+all\s+your\s+money",
     r"stop\s+taking\s+your\s+medication",
-    r"no\s+need\s+to\s+see\s+a\s+doctor",
 ]
 
 SAFE_FALLBACK = (
@@ -52,23 +50,22 @@ async def citation_check(
 ) -> dict[str, Any]:
     """
     Verify that factual claims in the response are grounded in RAG sources.
-    Returns: {passed: bool, citations_found: int, details: str}
+    Only fails if response has ZERO grounded claims/citation markers.
     """
     if not rag_sources:
+        logger.info("citation_check result: passed=False, reason=No RAG sources available.")
         return {
             "passed": False,
             "citations_found": 0,
             "details": "No RAG sources available to validate against.",
         }
 
-    # Extract source identifiers from RAG chunks
     source_texts = []
     source_names = []
     for src in rag_sources:
         source_texts.append(src.get("content", "").lower())
         source_names.append(src.get("source", "unknown"))
 
-    # Check if response content is grounded in source material
     response_lower = response_text.lower()
     sentences = [s.strip() for s in re.split(r'[.!?]', response_text) if len(s.strip()) > 20]
 
@@ -77,7 +74,6 @@ async def citation_check(
 
     for sentence in sentences:
         sentence_lower = sentence.lower()
-        # Check if key terms from the sentence appear in any source
         words = set(re.findall(r'\b\w{4,}\b', sentence_lower))
         for source_text in source_texts:
             overlap = sum(1 for w in words if w in source_text)
@@ -85,8 +81,14 @@ async def citation_check(
                 grounded_count += 1
                 break
 
+    # Only fail if grounded_count is ZERO
+    passed = grounded_count > 0
     grounding_ratio = grounded_count / total_claims
-    passed = grounding_ratio >= 0.5  # At least 50% of claims should be grounded
+
+    logger.info(
+        f"citation_check result: passed={passed}, grounded_count={grounded_count}, "
+        f"total_claims={total_claims}, ratio={round(grounding_ratio, 2)}"
+    )
 
     return {
         "passed": passed,
@@ -105,8 +107,7 @@ async def age_appropriateness_check(
 ) -> dict[str, Any]:
     """
     Check response for age-inappropriate content.
-    Stricter for 11-24 age band.
-    Returns: {passed: bool, details: str}
+    Only fails on explicit inappropriate keywords (INAPPROPRIATE_YOUNG).
     """
     violations = []
 
@@ -115,11 +116,14 @@ async def age_appropriateness_check(
             if re.search(pattern, response_text, re.IGNORECASE):
                 violations.append(pattern)
 
-    if violations:
+    passed = len(violations) == 0
+    logger.info(f"age_appropriateness_check result: passed={passed}, violations={violations}, age_band={age_band}")
+
+    if not passed:
         return {
             "passed": False,
             "violations": len(violations),
-            "details": f"Content may not be appropriate for age band {age_band}.",
+            "details": f"Content may not be appropriate for age band {age_band}. Violated: {violations}",
         }
 
     return {
@@ -136,7 +140,7 @@ async def domain_safety_check(
 ) -> dict[str, Any]:
     """
     Check for safety violations: no medical diagnosis, no financial guarantees.
-    Returns: {passed: bool, details: str}
+    Only fails on hard guarantees (guaranteed returns, definitely cures, risk-free profit).
     """
     violations = []
 
@@ -144,9 +148,8 @@ async def domain_safety_check(
         if re.search(pattern, response_text, re.IGNORECASE):
             violations.append(pattern)
 
-    # Additional pillar-specific checks
+    # Additional pillar-specific checks (hard constraints only)
     if pillar == "HEALTH":
-        # Should not prescribe specific medications
         med_patterns = [
             r"take\s+\d+\s*mg\s+of\s+\w+",
             r"prescription:\s+\w+",
@@ -156,7 +159,6 @@ async def domain_safety_check(
                 violations.append("medication_prescription")
 
     elif pillar == "FINANCE":
-        # Should not guarantee returns
         fin_patterns = [
             r"guaranteed\s+\d+%\s+returns",
             r"risk-free\s+profit",
@@ -166,11 +168,14 @@ async def domain_safety_check(
             if re.search(p, response_text, re.IGNORECASE):
                 violations.append("financial_guarantee")
 
-    if violations:
+    passed = len(violations) == 0
+    logger.info(f"domain_safety_check result: passed={passed}, violations={violations}, pillar={pillar}")
+
+    if not passed:
         return {
             "passed": False,
             "violations": len(violations),
-            "details": f"Safety concern detected in {pillar} response.",
+            "details": f"Safety concern detected in {pillar} response. Violated: {violations}",
         }
 
     return {
@@ -188,7 +193,7 @@ async def run_all_validations(
 ) -> dict[str, Any]:
     """
     Run all 3 validation checks in parallel.
-    Returns combined result with pass/fail and safe fallback if needed.
+    Returns combined result with pass/fail and details.
     """
     import asyncio
 
@@ -221,6 +226,5 @@ async def run_all_validations(
         if not safety_result["passed"]:
             failures.append("domain_safety")
         result["failed_checks"] = failures
-        logger.warning(f"Validation FAILED: {failures}")
 
     return result

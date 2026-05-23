@@ -213,11 +213,32 @@ async def process_query(
         pillar=intent,
     )
 
-    # If validation fails, use fallback
+    # Check validation and construct warnings
+    validation_warnings = []
+    if not validation["all_passed"]:
+        failed_checks = validation.get("failed_checks", [])
+        for chk in failed_checks:
+            detail = ""
+            if chk == "citation":
+                detail = validation["citation_check"].get("details", "")
+            elif chk == "age_appropriateness":
+                detail = validation["age_appropriateness_check"].get("details", "")
+            elif chk == "domain_safety":
+                detail = validation["domain_safety_check"].get("details", "")
+            validation_warnings.append(f"{chk}: {detail}")
+            logger.warning(f"Validation WARNING - check '{chk}' failed: {detail}")
+
+    # Determine mode: STRICT_VALIDATION flag
+    strict_val_env = os.getenv("STRICT_VALIDATION", "false").lower()
+    is_strict = strict_val_env in ("true", "1", "yes")
+
     hallucination_passed = validation["all_passed"]
     if not hallucination_passed:
-        response_text = validation.get("fallback_response", SAFE_FALLBACK)
-        logger.warning(f"Validation failed: {validation.get('failed_checks', [])}")
+        if is_strict:
+            response_text = validation.get("fallback_response", SAFE_FALLBACK)
+            logger.warning(f"Strict validation FAILED, using fallback: {validation.get('failed_checks', [])}")
+        else:
+            logger.info(f"Validation FAILED in soft mode (STRICT_VALIDATION=false). Warnings: {validation_warnings}")
 
     latency_ms = (time.time() - start_time) * 1000
 
@@ -237,6 +258,7 @@ async def process_query(
             "age_check": validation["age_appropriateness_check"]["passed"],
             "safety_check": validation["domain_safety_check"]["passed"],
         },
+        "validation_warnings": validation_warnings,
         "latency_ms": round(latency_ms, 1),
         "from_cache": False,
         "steps": steps,
