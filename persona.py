@@ -72,12 +72,27 @@ TONE_BY_AGE_BAND: dict[str, dict[str, Any]] = {
 _DEFAULT_AGE_BAND = "25-40"
 
 
+# Asker labels for nicer prose when user_mode=other
+_ASKER_PROSE = {
+    "husband": "husband",
+    "father": "father",
+    "brother": "brother",
+    "son": "son",
+    "friend": "friend",
+    "other": "someone who cares about her",
+    "self": "",
+}
+
+
 def build_persona_prefix(profile: dict) -> str:
     """Generate tone instructions for the agent prompt.
 
-    `profile` should ideally come from Firestore user_profiles and include:
-      age_band, preferred_name, language
-    Missing keys are tolerated.
+    The tone tuning is keyed on age_band (the SUBJECT's age band — i.e. the
+    woman being helped), but the addressee + pronouns flip based on user_mode:
+      user_mode='self'  -> addressee = the woman, pronouns 'you'/'your'
+      user_mode='other' -> addressee = the asker (e.g. husband), pronouns 'she'/'her'
+
+    `profile` should come from Firestore user_profiles. Missing keys tolerated.
     """
     profile = profile or {}
     age_band = profile.get("age_band") or _DEFAULT_AGE_BAND
@@ -85,26 +100,61 @@ def build_persona_prefix(profile: dict) -> str:
         age_band = _DEFAULT_AGE_BAND
 
     tone = TONE_BY_AGE_BAND[age_band]
-    name = (profile.get("preferred_name") or "").strip()
+    user_mode = (profile.get("user_mode") or "self").lower()
+    subject_name = (profile.get("preferred_name") or "").strip()
     language = (profile.get("language") or "English").strip() or "English"
+    asker_role = (profile.get("asker_role") or "").strip().lower()
+    asker_label = _ASKER_PROSE.get(asker_role, asker_role) if asker_role else ""
 
     do_lines = "\n".join(f"- {d}" for d in tone["do"])
     dont_lines = "\n".join(f"- {d}" for d in tone["dont"])
-
-    name_line = f"User's name (use occasionally, not in every sentence): {name}" if name else ""
     language_line = f"Language: respond primarily in {language}."
+
+    if user_mode == "other":
+        # Speaking TO the asker, ABOUT the subject. Tone calibrated to the
+        # SUBJECT's life stage, but pronouns and addressee are flipped.
+        subj = subject_name or "her"
+        asker_prose = asker_label or "the person asking"
+        header = (
+            f"You are speaking to a {asker_prose} who is asking on behalf of "
+            f"{subj}. The TONE below is tuned to {subj}'s life stage "
+            f"(age band {age_band}) so the guidance respects WHERE SHE IS, "
+            "but you address the asker directly. Use 'she' / 'her' / "
+            f"'{subj}' for the subject, and 'you' for the asker.\n\n"
+            f"Subject (the woman being helped): {subj}"
+            + (f", a {profile.get('subject_role')}" if profile.get('subject_role') else "")
+            + f"\nAsker (who you're talking to): the {asker_prose}\n"
+        )
+        addressee_block = (
+            "ADDRESSEE GUIDANCE:\n"
+            f"- Address the {asker_prose} directly. Never address {subj} as 'you'.\n"
+            f"- Refer to the subject as '{subj}', 'she', or 'her'.\n"
+            "- Briefly acknowledge that the asker is asking on her behalf and that this care matters.\n"
+            "- Where useful, suggest concrete steps the asker can take "
+            "(e.g. 'You could share this with her', 'You might encourage her to...').\n"
+        )
+    else:
+        subj = subject_name
+        header = ""
+        addressee_block = (
+            "ADDRESSEE GUIDANCE:\n"
+            f"- Address her directly using 'you' / 'your'.\n"
+            + (f"- Her name is {subj}. Use it occasionally, not in every sentence.\n" if subj else "")
+            + "- Never refer to her in the third person.\n"
+        )
 
     return (
         "\n=== TONE INSTRUCTIONS - STRICTLY FOLLOW ===\n"
+        f"{header}"
         f"Age band: {age_band}\n"
         f"Voice: {tone['voice']}\n"
         f"Vocabulary: {tone['vocabulary']}\n"
         f"Structure: {tone['structure']}\n\n"
+        f"{addressee_block}\n"
         f"DO:\n{do_lines}\n\n"
         f"DO NOT:\n{dont_lines}\n\n"
         f"Sample opener style: \"{tone['sample_opener']}\"\n"
-        + (name_line + "\n" if name_line else "")
-        + f"{language_line}\n"
+        f"{language_line}\n"
         "=============================================\n"
     )
 

@@ -20,6 +20,7 @@ from clarifier import (
     is_yes_no,
     build_clarification_context,
     opening_kalpana_line,
+    filter_already_answered,
 )
 from dual_user import get_user_profile
 import agents.health as health_agent
@@ -198,10 +199,18 @@ async def process_query(
     if not phase or phase == "done":
         # Classify the intent up front so we can ask pillar-tuned questions
         intent = await classify_intent(query)
-        clarifying_qs = get_clarifying_questions(intent, age_band, query)
+        template_qs = get_clarifying_questions(intent, age_band, query)
 
-        # If no template available (defensive), skip straight to answering
+        # Fetch profile once for filtering + framing
+        profile = await get_user_profile(user_id) if user_id else {}
+
+        # Smart filter — drop questions the user already answered in their
+        # original message or that the profile implies
+        clarifying_qs = await filter_already_answered(template_qs, query, profile)
+
+        # If filter returned 0 questions OR no template available, skip straight to answering
         if not clarifying_qs:
+            logger.info(f"Skipping clarifying — user query already covers all questions: '{query[:80]}'")
             _set_session_state(session_id, {
                 "phase": "answering_inline",
                 "pillar": intent,
@@ -218,8 +227,6 @@ async def process_query(
                 start_time=start_time,
             )
 
-        # Fetch user's preferred_name for a warmer opener
-        profile = await get_user_profile(user_id) if user_id else {}
         name = profile.get("preferred_name") or ""
         opener = opening_kalpana_line(intent, name=name)
 
@@ -318,10 +325,90 @@ async def process_query(
             start_time=start_time,
         )
 
-    # ── STATE: ANSWERING / FOLLOWUP ── new user message after a final answer
-    # Treat this as a brand new topic: reset and re-clarify
+    # ── STATE: DONE ── decide: follow-up on same topic, or new topic?
+    last_pillar = state.get("last_pillar")
+    last_query = state.get("last_query")
+    last_answer = state.get("last_answer_preview", "")
+
+    is_followup = False
+    if last_pillar and last_query:
+        is_followup = await _is_followup(
+            new_query=query,
+            last_query=last_query,
+            last_pillar=last_pillar,
+        )
+
+    if is_followup:
+        # Same topic — skip clarifying, route to agent with prior context
+        logger.info(f"Detected follow-up on {last_pillar}: '{query[:60]}'")
+        # Build conversation history into the enriched query
+        prior_qa = state.get("qa_pairs", []) or []
+        followup_history = list(prior_qa)
+        if last_answer:
+            followup_history.append({
+                "q": f"(previous answer about {last_pillar.lower()})",
+                "a": last_answer,
+            })
+        followup_history.append({
+            "q": "User's follow-up",
+            "a": query,
+        })
+
+        _set_session_state(session_id, {
+            **state,
+            "phase": "answering",
+        })
+
+        return await _generate_full_answer(
+            user_id=user_id,
+            age_band=age_band,
+            query=last_query,
+            pillar=last_pillar,
+            qa_pairs=followup_history,
+            session_id=session_id,
+            start_time=start_time,
+        )
+
+    # New topic — reset and re-clarify
+    logger.info(f"New topic detected, resetting clarifying flow: '{query[:60]}'")
     _clear_session_state(session_id)
     return await process_query(user_id=user_id, age_band=age_band, query=query, session_id=session_id)
+
+
+async def _is_followup(*, new_query: str, last_query: str, last_pillar: str) -> bool:
+    """Best-effort detection: does new_query continue the last conversation?"""
+    q = (new_query or "").strip().lower()
+    if not q:
+        return False
+
+    # Cheap heuristics first
+    short_followups = (
+        "yes", "no", "ok", "okay", "sure", "thanks", "thank you",
+        "more", "tell me more", "go on", "and?", "why", "how",
+    )
+    if q in short_followups or len(q) < 6:
+        return True
+
+    referential = ("this ", "that ", "it ", "these ", "those ", "and ", "but ",
+                   "what about", "what if", "why ", "how ")
+    if q.startswith(referential):
+        return True
+
+    # LLM tiebreaker for ambiguous cases
+    try:
+        from clarifier import _call_gemini as _gemini  # reuse helper
+        prompt = (
+            "A user just received an answer about a topic. They sent another message.\n"
+            f"Topic of previous answer: {last_pillar}\n"
+            f"Previous question: \"{last_query[:200]}\"\n"
+            f"New message: \"{new_query[:200]}\"\n\n"
+            "Is the new message a follow-up on the same topic, or a fresh "
+            "unrelated question? Reply with EXACTLY one word: 'followup' or 'new'."
+        )
+        raw = (await _gemini(prompt, max_tokens=5, temperature=0.0)).strip().lower()
+        return raw.startswith("followup")
+    except Exception:
+        return False
 
 
 async def _generate_full_answer(
@@ -358,7 +445,14 @@ async def _generate_full_answer(
     if cached:
         latency_ms = (time.time() - start_time) * 1000
         metrics.record_session(latency_ms, intent, age_band, cost=0.0)
-        _set_session_state(session_id, {**_get_session_state(session_id), "phase": "done"})
+        prior_state = _get_session_state(session_id)
+        _set_session_state(session_id, {
+            **prior_state,
+            "phase": "done",
+            "last_pillar": intent,
+            "last_query": prior_state.get("original_query") or query,
+            "last_answer_preview": (cached.get("response") or "")[:600],
+        })
         return {**cached, "from_cache": True, "latency_ms": round(latency_ms, 1), "type": "answer"}
 
     # Step 2: Get memory context
@@ -461,8 +555,16 @@ async def _generate_full_answer(
     cache_data = {k: v for k, v in result.items() if k not in ("steps", "latency_ms", "from_cache")}
     await set_cached_response(enriched_query, age_band, intent, cache_data)
 
-    # Mark conversation as done so the next user message starts a new clarifying flow
-    _set_session_state(session_id, {**_get_session_state(session_id), "phase": "done"})
+    # Mark conversation as done and remember the answered topic so a follow-up
+    # user message can be detected and routed without re-clarifying.
+    prior_state = _get_session_state(session_id)
+    _set_session_state(session_id, {
+        **prior_state,
+        "phase": "done",
+        "last_pillar": intent,
+        "last_query": prior_state.get("original_query") or query,
+        "last_answer_preview": (response_text or "")[:600],
+    })
 
     # Log trace
     trace.add_generation(

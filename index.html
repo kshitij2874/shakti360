@@ -747,23 +747,59 @@ function GreetingCard({ greeting, onContinue, onStartFresh }) {
 // CHAT VIEW
 // ═══════════════════════════════════════
 function ChatView({ idToken, user, onResetOnboarding }) {
-  const [messages, setMessages] = useState([]);
+  const userId = user.uid;
+
+  // ── Persistence keys (per user) so tab switches don't wipe the conversation ──
+  const MSG_KEY = `kalpana_msgs_${userId}`;
+  const SID_KEY = `kalpana_sid_${userId}`;
+
+  const loadStoredMessages = () => {
+    try {
+      const raw = localStorage.getItem(MSG_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+  };
+  const loadStoredSessionId = () => {
+    try {
+      const sid = localStorage.getItem(SID_KEY);
+      return sid || crypto.randomUUID().substring(0, 12);
+    } catch (e) { return crypto.randomUUID().substring(0, 12); }
+  };
+
+  const [messages, setMessages] = useState(loadStoredMessages);
   const [input, setInput] = useState('');
-  const [ageBand, setAgeBand] = useState(null); // Will be set from profile
-  const [preferredName, setPreferredName] = useState(''); // From onboarding
+  const [ageBand, setAgeBand] = useState(null);
+  const [preferredName, setPreferredName] = useState('');
   const [userMode, setUserMode] = useState('self');
   const [subjectRole, setSubjectRole] = useState('');
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [greeting, setGreeting] = useState(null);
   const [showGreeting, setShowGreeting] = useState(false);
-  const userId = user.uid;
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID().substring(0,12));
+  const [sessionId, setSessionId] = useState(loadStoredSessionId);
   const [loading, setLoading] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const endRef = useRef(null);
   const inputRef = useRef(null);
 
   const authHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` };
+
+  // Persist messages + sessionId across tab switches / page reloads.
+  // Strip non-serialisable callbacks before storing.
+  useEffect(() => {
+    try {
+      const safe = messages.map(m => {
+        const { onApprove, onReject, ...rest } = m || {};
+        return rest;
+      });
+      localStorage.setItem(MSG_KEY, JSON.stringify(safe.slice(-30))); // cap at 30 turns
+    } catch (e) { /* quota or serialisation error - ignore */ }
+  }, [messages]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SID_KEY, sessionId); } catch (e) {}
+  }, [sessionId]);
 
   // Friendly labels for subject_role keys
   const SUBJECT_ROLE_LABELS = {
@@ -844,6 +880,23 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     } catch (e) {
       // ignore
     }
+  };
+
+  const handleNewConversation = () => {
+    if (messages.length === 0) return;
+    const ok = window.confirm("Start a new conversation? Your current chat will be cleared from this device.");
+    if (!ok) return;
+    setMessages([]);
+    setShowGreeting(false);
+    setInput('');
+    setThinkingSteps([]);
+    const fresh = crypto.randomUUID().substring(0, 12);
+    setSessionId(fresh);
+    try {
+      localStorage.removeItem(MSG_KEY);
+      localStorage.setItem(SID_KEY, fresh);
+    } catch (e) {}
+    inputRef.current?.focus();
   };
 
   const handleSwitchMode = async () => {
@@ -953,20 +1006,31 @@ function ChatView({ idToken, user, onResetOnboarding }) {
         </div>
       )}
 
-      {/* Age Band Selector */}
-      <div className="flex items-center justify-center gap-2 py-3" style={{borderBottom:'1px solid var(--kalpana-rose-100)', background:'white'}}>
-        <span className="text-xs mr-2" style={{color:'var(--kalpana-text-soft)'}}>
-          {userMode === 'other' ? `Her age:` : 'Age Group:'}
-        </span>
-        {AGE_BANDS.map(ab => (
-          <button key={ab} onClick={() => setAgeBand(ab)}
-            className="px-4 py-1.5 rounded-full text-xs font-semibold transition-all"
-            style={ageBand===ab
-              ? {background:'var(--kalpana-rose-500)', color:'white', transform:'scale(1.05)', boxShadow:'0 4px 12px rgba(233, 78, 138, 0.25)'}
-              : {background:'var(--kalpana-rose-50)', color:'var(--kalpana-rose-700)', border:'1px solid var(--kalpana-rose-100)'}}>
-            {ab}
+      {/* Age Band Selector + New chat */}
+      <div className="flex items-center justify-between gap-2 py-3 px-3 sm:px-4" style={{borderBottom:'1px solid var(--kalpana-rose-100)', background:'white'}}>
+        <div className="flex items-center justify-center gap-2 flex-1 flex-wrap">
+          <span className="text-xs mr-1" style={{color:'var(--kalpana-text-soft)'}}>
+            {userMode === 'other' ? `Her age:` : 'Age:'}
+          </span>
+          {AGE_BANDS.map(ab => (
+            <button key={ab} onClick={() => setAgeBand(ab)}
+              className="px-3 sm:px-4 py-1.5 rounded-full text-xs font-semibold transition-all"
+              style={ageBand===ab
+                ? {background:'var(--kalpana-rose-500)', color:'white', transform:'scale(1.05)', boxShadow:'0 4px 12px rgba(233, 78, 138, 0.25)'}
+                : {background:'var(--kalpana-rose-50)', color:'var(--kalpana-rose-700)', border:'1px solid var(--kalpana-rose-100)'}}>
+              {ab}
+            </button>
+          ))}
+        </div>
+        {messages.length > 0 && (
+          <button onClick={handleNewConversation}
+            className="text-xs px-2.5 py-1.5 rounded-lg transition flex-shrink-0 hover:bg-rose-50"
+            style={{color:'var(--kalpana-rose-700)', border:'1px solid var(--kalpana-rose-100)'}}
+            title="Start a new conversation">
+            <span className="hidden sm:inline">+ New chat</span>
+            <span className="sm:hidden">+ New</span>
           </button>
-        ))}
+        )}
       </div>
 
       {/* Messages */}
