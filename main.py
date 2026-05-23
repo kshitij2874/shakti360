@@ -50,6 +50,42 @@ from greeting import generate_greeting
 # ── Pending tool calls store (for human oversight gate) ──
 _pending_approvals: dict[str, dict[str, Any]] = {}
 
+
+async def _extract_and_save_life_context(
+    *,
+    session_id: str,
+    user_id: str,
+    query: str,
+    pillar: str,
+    answer: str,
+    clarifying_qa: list,
+) -> None:
+    """Background task: distil a life-context phrase from the answered session and
+    write it back to the same session doc so future /greeting calls can use it."""
+    try:
+        from greeting import extract_life_context
+        snapshot = {
+            "query": query,
+            "pillar": pillar,
+            "answer": answer,
+            "clarifying_qa": clarifying_qa,
+        }
+        life_context = await extract_life_context(snapshot)
+        if not life_context:
+            return
+        try:
+            from google.cloud import firestore as gcloud_firestore  # type: ignore
+            db = gcloud_firestore.Client()
+            db.collection("sessions").document(session_id).set(
+                {"life_context": life_context},
+                merge=True,
+            )
+            logger.info(f"life_context saved for session {session_id}: {life_context[:80]}")
+        except Exception as e:
+            logger.warning(f"Failed to persist life_context: {e}")
+    except Exception as e:
+        logger.warning(f"life_context extraction failed: {e}")
+
 # ── Session history store ──
 _session_history: dict[str, list[dict[str, Any]]] = {}
 
@@ -187,17 +223,33 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
             try:
                 from google.cloud import firestore as gcloud_firestore  # type: ignore
                 db = gcloud_firestore.Client()
-                db.collection("sessions").document(session_id).set({
+                answer_text = result.get("response", "")
+                session_payload = {
                     "user_id": request.user_id,
                     "session_id": session_id,
                     "query": request.query,
                     "age_band": request.age_band,
                     "pillar": result.get("pillar", ""),
                     "citations": result.get("citations", []),
+                    "clarifying_qa": result.get("clarifying_qa", []),
+                    "answer": answer_text[:1500],
+                    "response_preview": answer_text[:300],
                     "created_at": gcloud_firestore.SERVER_TIMESTAMP,
-                }, merge=True)
+                }
+                db.collection("sessions").document(session_id).set(session_payload, merge=True)
             except Exception as e:
                 logger.warning(f"Failed to persist session to Firestore: {e}")
+
+            # Async life-context extraction (non-blocking) — patches the same
+            # session doc once Gemini returns. Greeting endpoint reads it later.
+            asyncio.create_task(_extract_and_save_life_context(
+                session_id=session_id,
+                user_id=request.user_id,
+                query=request.query,
+                pillar=result.get("pillar", ""),
+                answer=result.get("response", ""),
+                clarifying_qa=result.get("clarifying_qa", []),
+            ))
 
         # Async memory extraction (non-blocking) — only on final answer
         if is_final_answer:

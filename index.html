@@ -687,7 +687,10 @@ function ChatView({ idToken, user, onResetOnboarding }) {
 
   // Greeting handlers
   const handleContinue = () => {
-    if (greeting?.last_query) {
+    // Prefer the specific life-context phrase if Kalpana extracted one
+    if (greeting?.life_context) {
+      setInput(`Let's pick up on what we were talking about — ${greeting.life_context}`);
+    } else if (greeting?.last_query) {
       setInput(`Let's continue our conversation about ${greeting.last_pillar || 'that topic'}.`);
     }
     setShowGreeting(false);
