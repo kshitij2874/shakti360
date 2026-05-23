@@ -41,6 +41,7 @@ from onboarding import (
     save_onboarding_answer,
     get_current_question,
     get_visible_questions,
+    reset_onboarding,
     ONBOARDING_FLOW,
 )
 from greeting import generate_greeting
@@ -329,6 +330,13 @@ async def onboarding_state(user: dict = Depends(verify_token)):
 async def onboarding_answer(answer: OnboardingAnswer, user: dict = Depends(verify_token)):
     """Save an onboarding answer and return the next question (or completion)."""
     result = await save_onboarding_answer(user["uid"], answer)
+    return JSONResponse(content=result)
+
+
+@app.post("/onboarding/reset")
+async def onboarding_reset(user: dict = Depends(verify_token)):
+    """Clear onboarding so the user can re-run the flow (e.g. switch from other to self)."""
+    result = await reset_onboarding(user["uid"])
     return JSONResponse(content=result)
 
 

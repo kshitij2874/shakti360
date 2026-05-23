@@ -273,6 +273,35 @@ async def save_onboarding_answer(user_id: str, answer: OnboardingAnswer) -> dict
     }
 
 
+async def reset_onboarding(user_id: str) -> dict:
+    """Clear onboarding state so the user can run through the flow again."""
+    cleared = {
+        "onboarding_answers": {},
+        "onboarding_complete": False,
+        "user_mode": None,
+        "subject_role": None,
+        "asker_role": None,
+        "preferred_name": None,
+        "age_band": None,
+        "language": None,
+    }
+
+    db = _get_firestore()
+    if db:
+        try:
+            from google.cloud import firestore as gcloud_firestore  # type: ignore
+            cleared["updated_at"] = gcloud_firestore.SERVER_TIMESTAMP
+            db.collection("user_profiles").document(user_id).set(cleared, merge=True)
+            logger.info(f"Onboarding reset (Firestore): user={user_id}")
+        except Exception as e:
+            logger.warning(f"Firestore reset error: {e}")
+
+    if user_id in _local_profiles:
+        _local_profiles[user_id].update(cleared)
+
+    return {"reset": True}
+
+
 # ═══════════════════════════════════════════════════════════
 # BACKWARDS COMPAT — legacy import shim
 # ═══════════════════════════════════════════════════════════

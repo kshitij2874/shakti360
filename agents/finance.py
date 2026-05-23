@@ -12,6 +12,7 @@ from typing import Any
 from observability import observe
 from rag import retrieve, format_context
 from tools import get_helplines
+from dual_user import get_framing_for_user
 
 logger = logging.getLogger("shakti.agents.finance")
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -31,6 +32,7 @@ async def run(
     age_band: str,
     user_memory_context: str = "",
     session_id: str = "",
+    user_id: str = "",
 ) -> dict[str, Any]:
     """
     Execute the finance agent.
@@ -40,8 +42,12 @@ async def run(
     rag_chunks = await retrieve(query=query, pillar="FINANCE", age_band=age_band)
     context = format_context(rag_chunks)
 
-    # 2. Build prompt
+    # 2. Build dual-user framing
+    user_ctx, framing_prefix = await get_framing_for_user(user_id)
+
+    # 3. Build prompt
     prompt = (
+        f"{framing_prefix}"
         f"{SYSTEM_PROMPT}\n\n"
         f"User age band: {age_band}\n"
         f"User memory context: {user_memory_context}\n\n"

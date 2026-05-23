@@ -537,11 +537,13 @@ function GreetingCard({ greeting, onContinue, onStartFresh }) {
 // ═══════════════════════════════════════
 // CHAT VIEW
 // ═══════════════════════════════════════
-function ChatView({ idToken, user }) {
+function ChatView({ idToken, user, onResetOnboarding }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [ageBand, setAgeBand] = useState(null); // Will be set from profile
   const [preferredName, setPreferredName] = useState(''); // From onboarding
+  const [userMode, setUserMode] = useState('self');
+  const [subjectRole, setSubjectRole] = useState('');
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [greeting, setGreeting] = useState(null);
   const [showGreeting, setShowGreeting] = useState(false);
@@ -554,6 +556,13 @@ function ChatView({ idToken, user }) {
 
   const authHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` };
 
+  // Friendly labels for subject_role keys
+  const SUBJECT_ROLE_LABELS = {
+    wife:'wife', daughter:'daughter', mother:'mother', sister:'sister', friend:'friend', colleague:'colleague',
+    student:'student', working:'working woman', new_mother:'new mother', homemaker:'homemaker', entrepreneur:'entrepreneur', retired:'mid-life',
+  };
+  const subjectLabel = SUBJECT_ROLE_LABELS[subjectRole] || subjectRole;
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages, thinkingSteps]);
 
   // Fetch user profile + greeting on mount
@@ -565,6 +574,8 @@ function ChatView({ idToken, user }) {
         if (data.complete && data.profile) {
           if (data.profile.age_band) setAgeBand(data.profile.age_band);
           if (data.profile.preferred_name) setPreferredName(data.profile.preferred_name);
+          if (data.profile.user_mode) setUserMode(data.profile.user_mode);
+          if (data.profile.subject_role) setSubjectRole(data.profile.subject_role);
         }
         if (!data.profile?.age_band) setAgeBand('25-40');
       } catch(e) {
@@ -600,6 +611,19 @@ function ChatView({ idToken, user }) {
   const handleStartFresh = () => {
     setShowGreeting(false);
     inputRef.current?.focus();
+  };
+
+  const handleSwitchMode = async () => {
+    const ok = window.confirm(
+      "Switch who Kalpana is helping?\n\nThis will restart the short setup conversation so we can re-tune for you."
+    );
+    if (!ok) return;
+    try {
+      await fetch(`${API}/onboarding/reset`, { method:'POST', headers:authHeaders });
+      if (onResetOnboarding) onResetOnboarding();
+    } catch(e) {
+      console.error('Failed to reset onboarding:', e);
+    }
   };
 
   const handleApprove = async (sid) => {
@@ -665,9 +689,22 @@ function ChatView({ idToken, user }) {
 
   return (
     <div className="flex flex-col h-[calc(100vh-72px)]" style={{background:'var(--kalpana-bg)'}}>
+      {/* Subject Indicator (only in 'other' mode) */}
+      {userMode === 'other' && preferredName && (
+        <div className="px-4 py-2 text-sm flex items-center justify-center gap-2 flex-wrap"
+          style={{background:'var(--kalpana-rose-50)', borderBottom:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-rose-700)'}}>
+          <span>💕 Asking on behalf of <strong>{preferredName}</strong>{subjectLabel ? ` (${subjectLabel})` : ''}</span>
+          <button onClick={handleSwitchMode} className="text-xs underline ml-1 hover:no-underline" style={{color:'var(--kalpana-rose-700)'}}>
+            Switch
+          </button>
+        </div>
+      )}
+
       {/* Age Band Selector */}
       <div className="flex items-center justify-center gap-2 py-3" style={{borderBottom:'1px solid var(--kalpana-rose-100)', background:'white'}}>
-        <span className="text-xs mr-2" style={{color:'var(--kalpana-text-soft)'}}>Age Group:</span>
+        <span className="text-xs mr-2" style={{color:'var(--kalpana-text-soft)'}}>
+          {userMode === 'other' ? `Her age:` : 'Age Group:'}
+        </span>
         {AGE_BANDS.map(ab => (
           <button key={ab} onClick={() => setAgeBand(ab)}
             className="px-4 py-1.5 rounded-full text-xs font-semibold transition-all"
@@ -1004,6 +1041,10 @@ function App() {
     setOnboardingComplete(true);
   };
 
+  const handleResetOnboarding = () => {
+    setOnboardingComplete(false);
+  };
+
   const renderChatContent = () => {
     if (!authReady) {
       return (
@@ -1035,7 +1076,7 @@ function App() {
       return <OnboardingView idToken={idToken} onComplete={handleOnboardingComplete}/>;
     }
 
-    return <ChatView idToken={idToken} user={user}/>;
+    return <ChatView idToken={idToken} user={user} onResetOnboarding={handleResetOnboarding}/>;
   };
 
   return (

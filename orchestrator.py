@@ -105,6 +105,7 @@ async def route_to_agent(
     age_band: str,
     user_memory_context: str,
     session_id: str,
+    user_id: str = "",
 ) -> dict[str, Any]:
     """Route to the corresponding sub-agent."""
     agent = SUB_AGENTS.get(intent)
@@ -117,6 +118,7 @@ async def route_to_agent(
         age_band=age_band,
         user_memory_context=user_memory_context,
         session_id=session_id,
+        user_id=user_id,
     )
     return result
 
@@ -197,6 +199,7 @@ async def process_query(
         age_band=age_band,
         user_memory_context=memory_context,
         session_id=session_id,
+        user_id=user_id,
     )
 
     response_text = agent_result.get("response", "")
