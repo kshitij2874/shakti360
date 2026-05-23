@@ -328,6 +328,40 @@ function OnboardingView({ idToken, onComplete }) {
 }
 
 // ═══════════════════════════════════════
+// GREETING CARD
+// ═══════════════════════════════════════
+function GreetingCard({ greeting, onContinue, onStartFresh }) {
+  if (!greeting) return null;
+  return (
+    <div className="fade-in">
+      <div className="max-w-2xl mx-auto mb-4">
+        <div className="rounded-2xl p-6 border border-shakti-300/20 bg-gradient-to-br from-shakti-900/30 to-violet-900/30 backdrop-blur-sm">
+          <div className="flex items-start gap-3 mb-3">
+            <span className="text-2xl">🪷</span>
+            <div>
+              <p className="text-sm font-medium text-shakti-300 mb-1">Shakti remembers</p>
+              <p className="text-gray-200 leading-relaxed">{greeting.greeting}</p>
+            </div>
+          </div>
+          {greeting.has_context && (
+            <div className="flex gap-3 mt-4 ml-10">
+              <button onClick={onContinue}
+                className="px-4 py-2 bg-gradient-to-r from-shakti-600 to-violet-600 text-white rounded-lg text-sm font-medium hover:opacity-90 transition-all hover:scale-[1.02]">
+                Continue where we left off
+              </button>
+              <button onClick={onStartFresh}
+                className="px-4 py-2 border border-white/20 text-gray-300 rounded-lg text-sm font-medium hover:bg-white/5 transition">
+                Start something new
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
 // CHAT VIEW
 // ═══════════════════════════════════════
 function ChatView({ idToken, user }) {
@@ -336,6 +370,8 @@ function ChatView({ idToken, user }) {
   const [ageBand, setAgeBand] = useState(null); // Will be set from profile
   const [preferredName, setPreferredName] = useState(''); // From onboarding
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [greeting, setGreeting] = useState(null);
+  const [showGreeting, setShowGreeting] = useState(false);
   const userId = user.uid;
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID().substring(0,12));
   const [loading, setLoading] = useState(false);
@@ -347,9 +383,9 @@ function ChatView({ idToken, user }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages, thinkingSteps]);
 
-  // Fetch user profile to get saved age_band and preferred_name
+  // Fetch user profile + greeting on mount
   useEffect(() => {
-    const fetchProfile = async () => {
+    const init = async () => {
       try {
         const res = await fetch(`${API}/onboarding/state`, { headers: authHeaders });
         const data = await res.json();
@@ -357,15 +393,41 @@ function ChatView({ idToken, user }) {
           if (data.profile.age_band) setAgeBand(data.profile.age_band);
           if (data.profile.preferred_name) setPreferredName(data.profile.preferred_name);
         }
-        if (!ageBand) setAgeBand('25-40'); // Default fallback
+        if (!data.profile?.age_band) setAgeBand('25-40');
       } catch(e) {
         console.error('Failed to fetch profile:', e);
         setAgeBand('25-40');
       }
       setProfileLoaded(true);
+
+      // Fetch greeting
+      try {
+        const gRes = await fetch(`${API}/greeting`, { headers: authHeaders });
+        const gData = await gRes.json();
+        if (gData.greeting) {
+          setGreeting(gData);
+          setShowGreeting(true);
+        }
+      } catch(e) {
+        console.error('Failed to fetch greeting:', e);
+      }
     };
-    fetchProfile();
+    init();
   }, []);
+
+  // Greeting handlers
+  const handleContinue = () => {
+    if (greeting?.last_query) {
+      setInput(`Let's continue our conversation about ${greeting.last_pillar || 'that topic'}.`);
+    }
+    setShowGreeting(false);
+    inputRef.current?.focus();
+  };
+
+  const handleStartFresh = () => {
+    setShowGreeting(false);
+    inputRef.current?.focus();
+  };
 
   const handleApprove = async (sid) => {
     try {
@@ -386,6 +448,7 @@ function ChatView({ idToken, user }) {
     const q = input.trim();
     if (!q || loading || !ageBand) return;
     setInput('');
+    setShowGreeting(false);
     setMessages(prev => [...prev, { role:'user', content:q }]);
     setLoading(true);
     setThinkingSteps([{ step:'classifying', detail:'Classifying intent...' }]);
@@ -453,6 +516,9 @@ function ChatView({ idToken, user }) {
               ))}
             </div>
           </div>
+        )}
+        {showGreeting && greeting && (
+          <GreetingCard greeting={greeting} onContinue={handleContinue} onStartFresh={handleStartFresh}/>
         )}
         {messages.map((m, i) => <ChatMessage key={i} msg={m}/>)}
         {thinkingSteps.length > 0 && <ThinkingIndicator steps={thinkingSteps}/>}

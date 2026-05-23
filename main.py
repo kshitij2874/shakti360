@@ -1,7 +1,7 @@
 """
 main.py — FastAPI app for ShaktiAgent.
 Endpoints: /chat, /approve, /reject, /sessions/{user_id}, /metrics, /health,
-           /onboarding/state, /onboarding/answer
+           /onboarding/state, /onboarding/answer, /greeting
 Serves index.html frontend.
 """
 from __future__ import annotations
@@ -36,6 +36,7 @@ logger = logging.getLogger("shakti.main")
 from observability import metrics
 from tools import execute_tool
 from onboarding import get_onboarding_state, save_onboarding_answer, OnboardingAnswer, ONBOARDING_QUESTIONS
+from greeting import generate_greeting
 
 
 # ── Pending tool calls store (for human oversight gate) ──
@@ -151,7 +152,7 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
                 "timestamp": time.time(),
             }
 
-        # Store session history
+        # Store session history (in-memory)
         if request.user_id not in _session_history:
             _session_history[request.user_id] = []
         _session_history[request.user_id].append({
@@ -168,6 +169,22 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
         })
         # Keep only last 50 per user
         _session_history[request.user_id] = _session_history[request.user_id][-50:]
+
+        # Persist session to Firestore for greeting/context recall
+        try:
+            from google.cloud import firestore as gcloud_firestore  # type: ignore
+            db = gcloud_firestore.Client()
+            db.collection("sessions").document(session_id).set({
+                "user_id": request.user_id,
+                "session_id": session_id,
+                "query": request.query,
+                "age_band": request.age_band,
+                "pillar": result.get("pillar", ""),
+                "citations": result.get("citations", []),
+                "created_at": gcloud_firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+        except Exception as e:
+            logger.warning(f"Failed to persist session to Firestore: {e}")
 
         # Async memory extraction (non-blocking)
         asyncio.create_task(
@@ -287,6 +304,17 @@ async def onboarding_state(user: dict = Depends(verify_token)):
 async def onboarding_answer(answer: OnboardingAnswer, user: dict = Depends(verify_token)):
     """Save an onboarding answer and return the next question."""
     result = await save_onboarding_answer(user["uid"], answer)
+    return JSONResponse(content=result)
+
+
+# ═══════════════════════════════════════════════════════
+# GREETING ENDPOINT
+# ═══════════════════════════════════════════════════════
+
+@app.get("/greeting")
+async def greeting(user: dict = Depends(verify_token)):
+    """Return a personalized greeting for the returning user."""
+    result = await generate_greeting(user["uid"])
     return JSONResponse(content=result)
 
 
