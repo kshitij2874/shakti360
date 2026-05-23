@@ -1,7 +1,7 @@
-# 🪷 ShaktiAgent — Multi-Agent AI Life Companion for Women
+# Kalpana — Guiding Dreams, Empowering Decisions
 
 > **DeployFest 2026** by GDG Cloud Bengaluru  
-> GCP Project: `deployfest-kv-2026` | Region: `asia-south1`
+> GCP Project: `shakti360` | Region: `asia-south1`
 
 ShaktiAgent is a multi-agent AI system that serves as a life-stage companion for women across **3 life pillars** (Health, Finance, Career) and **3 age bands** (11–24, 25–40, 41+). Built with Google ADK, Vertex AI, Firestore, and Langfuse observability.
 
