@@ -1,6 +1,7 @@
 """
 main.py — FastAPI app for ShaktiAgent.
-Endpoints: /chat, /approve, /reject, /sessions/{user_id}, /metrics, /health
+Endpoints: /chat, /approve, /reject, /sessions/{user_id}, /metrics, /health,
+           /onboarding/state, /onboarding/answer
 Serves index.html frontend.
 """
 from __future__ import annotations
@@ -15,10 +16,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from auth import verify_token
 
 load_dotenv()
 
@@ -33,6 +35,7 @@ logger = logging.getLogger("shakti.main")
 # ── Lazy imports (avoid import-time GCP failures) ──
 from observability import metrics
 from tools import execute_tool
+from onboarding import get_onboarding_state, save_onboarding_answer, OnboardingAnswer, ONBOARDING_QUESTIONS
 
 
 # ── Pending tool calls store (for human oversight gate) ──
@@ -119,11 +122,13 @@ class RejectRequest(BaseModel):
 # ═══════════════════════════════════════════════════════
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
     """
     Main chat endpoint.
     Classifies intent → routes to sub-agent → validates → returns response.
     """
+    # Secure user_id from token
+    request.user_id = user["uid"]
     session_id = request.session_id or str(uuid.uuid4())[:12]
 
     try:
@@ -183,7 +188,7 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/approve")
-async def approve(request: ApproveRequest):
+async def approve(request: ApproveRequest, user: dict = Depends(verify_token)):
     """Approve and fire queued tool calls for a session."""
     pending = _pending_approvals.pop(request.session_id, None)
     if not pending:
@@ -209,7 +214,7 @@ async def approve(request: ApproveRequest):
 
 
 @app.post("/reject")
-async def reject(request: RejectRequest):
+async def reject(request: RejectRequest, user: dict = Depends(verify_token)):
     """Reject queued tool calls. Logs the rejection."""
     pending = _pending_approvals.pop(request.session_id, None)
     if not pending:
@@ -232,10 +237,11 @@ async def reject(request: RejectRequest):
 
 
 @app.get("/sessions/{user_id}")
-async def get_sessions(user_id: str):
-    """Return last 20 sessions for a user."""
-    sessions = _session_history.get(user_id, [])
-    return JSONResponse(content={"user_id": user_id, "sessions": sessions[-20:]})
+async def get_sessions(user_id: str, user: dict = Depends(verify_token)):
+    """Return last 20 sessions for a user (secured by token UID)."""
+    real_user_id = user["uid"]
+    sessions = _session_history.get(real_user_id, [])
+    return JSONResponse(content={"user_id": real_user_id, "sessions": sessions[-20:]})
 
 
 @app.get("/metrics")
@@ -256,6 +262,32 @@ async def health_check():
         "observability": "langfuse" if os.getenv("LANGFUSE_PUBLIC_KEY") else "console",
         "project": os.getenv("PROJECT_ID", "deployfest-kv-2026"),
     })
+
+
+# ═══════════════════════════════════════════════════════
+# ONBOARDING ENDPOINTS
+# ═══════════════════════════════════════════════════════
+
+@app.get("/onboarding/state")
+async def onboarding_state(user: dict = Depends(verify_token)):
+    """Get current onboarding state for the authenticated user."""
+    state = await get_onboarding_state(user["uid"])
+    if not state["complete"]:
+        step = state["step"]
+        return JSONResponse(content={
+            "complete": False,
+            "current_step": step,
+            "total_steps": len(ONBOARDING_QUESTIONS),
+            "question": ONBOARDING_QUESTIONS[step] if step < len(ONBOARDING_QUESTIONS) else None,
+        })
+    return JSONResponse(content={"complete": True, "profile": state["profile"]})
+
+
+@app.post("/onboarding/answer")
+async def onboarding_answer(answer: OnboardingAnswer, user: dict = Depends(verify_token)):
+    """Save an onboarding answer and return the next question."""
+    result = await save_onboarding_answer(user["uid"], answer)
+    return JSONResponse(content=result)
 
 
 # ═══════════════════════════════════════════════════════

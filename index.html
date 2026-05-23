@@ -11,6 +11,30 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+      from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBOOY4rQpuOlkv9ykuojls-g4NQkiJctQI",
+      authDomain: "shakti360.firebaseapp.com",
+      projectId: "shakti360",
+      storageBucket: "shakti360.firebasestorage.app",
+      messagingSenderId: "865544319222",
+      appId: "1:865544319222:web:54effebf29c521f972fcd7"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
+    window.__shakti_auth = {
+      auth, provider, signInWithPopup, signOut, onAuthStateChanged
+    };
+
+    window.dispatchEvent(new Event('firebase-ready'));
+  </script>
   <script>
     tailwind.config = {
       theme: {
@@ -133,24 +157,219 @@ function ChatMessage({ msg }) {
 }
 
 // ═══════════════════════════════════════
+// ONBOARDING VIEW
+// ═══════════════════════════════════════
+function OnboardingView({ idToken, onComplete }) {
+  const [step, setStep] = useState(0);
+  const [totalSteps, setTotalSteps] = useState(5);
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [textInput, setTextInput] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [transitioning, setTransitioning] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [completing, setCompleting] = useState(false);
+  const endRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const authHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` };
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages]);
+
+  useEffect(() => {
+    fetchState();
+  }, []);
+
+  const fetchState = async () => {
+    try {
+      const res = await fetch(`${API}/onboarding/state`, { headers: authHeaders });
+      const data = await res.json();
+      if (data.complete) {
+        onComplete();
+        return;
+      }
+      setStep(data.current_step);
+      setTotalSteps(data.total_steps);
+      if (data.question) {
+        setCurrentQuestion(data.question);
+        setMessages([{ role:'assistant', content: data.question.question, questionType: data.question.type, options: data.question.options }]);
+      }
+    } catch(e) {
+      console.error('Failed to fetch onboarding state:', e);
+    }
+    setLoading(false);
+  };
+
+  const submitAnswer = async (answer) => {
+    if (!currentQuestion || transitioning) return;
+    setTransitioning(true);
+
+    // Add user message
+    setMessages(prev => [...prev, { role:'user', content: answer }]);
+
+    try {
+      const res = await fetch(`${API}/onboarding/answer`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ question_id: currentQuestion.id, answer: answer }),
+      });
+      const data = await res.json();
+
+      if (data.complete) {
+        // Show completion message
+        setCompleting(true);
+        setMessages(prev => [...prev, {
+          role:'assistant',
+          content: "Wonderful! I've saved your preferences. Setting up your personalized experience..."
+        }]);
+        setTimeout(() => onComplete(), 2000);
+        return;
+      }
+
+      // Show next question after a brief delay
+      const nextQ = data.next_question;
+      setStep(data.next_step);
+      setTimeout(() => {
+        setMessages(prev => [...prev, { role:'assistant', content: nextQ.question, questionType: nextQ.type, options: nextQ.options }]);
+        setCurrentQuestion(nextQ);
+        setTextInput('');
+        setTransitioning(false);
+        inputRef.current?.focus();
+      }, 500);
+    } catch(e) {
+      console.error('Failed to save answer:', e);
+      setTransitioning(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-72px)] text-gray-500">
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1"></div>
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1" style={{animationDelay:'0.2s'}}></div>
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-3" style={{animationDelay:'0.4s'}}></div>
+        Loading...
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-72px)]">
+      {/* Progress Bar */}
+      <div className="px-4 py-3 border-b border-white/5">
+        <div className="max-w-2xl mx-auto">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-gray-400">Setting up your profile</span>
+            <span className="text-xs text-gray-500">Question {Math.min(step + 1, totalSteps)} of {totalSteps}</span>
+          </div>
+          <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-shakti-500 to-violet-500 rounded-full transition-all duration-500" style={{width:`${((step) / totalSteps) * 100}%`}}></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+        <div className="max-w-2xl mx-auto space-y-4">
+          {messages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} fade-in`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === 'user' ? 'bg-shakti-600/20 border border-shakti-500/20' : 'glass'}`}>
+                {msg.role === 'assistant' && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-lg">🪷</span>
+                    <span className="text-xs font-medium text-shakti-400">Shakti</span>
+                  </div>
+                )}
+                <div className="text-sm leading-relaxed">{msg.content}</div>
+                {/* Choice buttons for the latest assistant message */}
+                {msg.role === 'assistant' && i === messages.length - 1 && msg.questionType === 'choice' && !completing && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {msg.options.map((opt, j) => (
+                      <button key={j} onClick={() => submitAnswer(opt)} disabled={transitioning}
+                        className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm font-medium text-gray-300 hover:bg-shakti-600/20 hover:border-shakti-500/30 hover:text-shakti-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {completing && (
+            <div className="flex justify-center py-4 fade-in">
+              <div className="flex items-center gap-2 text-shakti-400">
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400"></div>
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400" style={{animationDelay:'0.2s'}}></div>
+                <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400" style={{animationDelay:'0.4s'}}></div>
+                <span className="text-sm ml-1">Preparing your personalized experience...</span>
+              </div>
+            </div>
+          )}
+          <div ref={endRef}/>
+        </div>
+      </div>
+
+      {/* Input (for text-type questions) */}
+      {currentQuestion?.type === 'text' && !completing && (
+        <div className="border-t border-white/5 p-4">
+          <div className="flex gap-3 max-w-2xl mx-auto">
+            <input ref={inputRef} value={textInput} onChange={e => setTextInput(e.target.value)}
+              onKeyDown={e => e.key==='Enter' && textInput.trim() && submitAnswer(textInput.trim())}
+              placeholder="Type your answer..."
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-shakti-500/50 transition placeholder-gray-500"/>
+            <button onClick={() => textInput.trim() && submitAnswer(textInput.trim())} disabled={!textInput.trim() || transitioning}
+              className="px-6 py-3 bg-gradient-to-r from-shakti-600 to-violet-600 rounded-xl font-semibold text-sm hover:opacity-90 transition disabled:opacity-30">
+              Send
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
 // CHAT VIEW
 // ═══════════════════════════════════════
-function ChatView() {
+function ChatView({ idToken, user }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [ageBand, setAgeBand] = useState('25-40');
-  const [userId] = useState(() => 'user_' + Math.random().toString(36).substr(2,6));
+  const [ageBand, setAgeBand] = useState(null); // Will be set from profile
+  const [preferredName, setPreferredName] = useState(''); // From onboarding
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const userId = user.uid;
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID().substring(0,12));
   const [loading, setLoading] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const endRef = useRef(null);
   const inputRef = useRef(null);
 
+  const authHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` };
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages, thinkingSteps]);
+
+  // Fetch user profile to get saved age_band and preferred_name
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const res = await fetch(`${API}/onboarding/state`, { headers: authHeaders });
+        const data = await res.json();
+        if (data.complete && data.profile) {
+          if (data.profile.age_band) setAgeBand(data.profile.age_band);
+          if (data.profile.preferred_name) setPreferredName(data.profile.preferred_name);
+        }
+        if (!ageBand) setAgeBand('25-40'); // Default fallback
+      } catch(e) {
+        console.error('Failed to fetch profile:', e);
+        setAgeBand('25-40');
+      }
+      setProfileLoaded(true);
+    };
+    fetchProfile();
+  }, []);
 
   const handleApprove = async (sid) => {
     try {
-      const res = await fetch(`${API}/approve`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid}) });
+      const res = await fetch(`${API}/approve`, { method:'POST', headers:authHeaders, body:JSON.stringify({session_id:sid}) });
       const data = await res.json();
       setMessages(prev => [...prev, { role:'assistant', content:'✅ Tools executed successfully:\n\n' + JSON.stringify(data.tool_results, null, 2), pillar:'' }]);
     } catch(e) { console.error(e); }
@@ -158,14 +377,14 @@ function ChatView() {
 
   const handleReject = async (sid) => {
     try {
-      await fetch(`${API}/reject`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid}) });
+      await fetch(`${API}/reject`, { method:'POST', headers:authHeaders, body:JSON.stringify({session_id:sid}) });
       setMessages(prev => [...prev, { role:'assistant', content:'❌ Tool execution was rejected. How else can I help?', pillar:'' }]);
     } catch(e) { console.error(e); }
   };
 
   const sendMessage = async () => {
     const q = input.trim();
-    if (!q || loading) return;
+    if (!q || loading || !ageBand) return;
     setInput('');
     setMessages(prev => [...prev, { role:'user', content:q }]);
     setLoading(true);
@@ -173,7 +392,7 @@ function ChatView() {
 
     try {
       const res = await fetch(`${API}/chat`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
+        method:'POST', headers:authHeaders,
         body:JSON.stringify({ user_id:userId, age_band:ageBand, query:q, session_id:sessionId }),
       });
       const data = await res.json();
@@ -195,6 +414,17 @@ function ChatView() {
     setLoading(false);
   };
 
+  if (!profileLoaded) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-72px)] text-gray-500">
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1"></div>
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1" style={{animationDelay:'0.2s'}}></div>
+        <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-3" style={{animationDelay:'0.4s'}}></div>
+        Loading your profile...
+      </div>
+    );
+  }
+
   const AGE_BANDS = ['11-24','25-40','41+'];
 
   return (
@@ -215,7 +445,7 @@ function ChatView() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
             <div className="text-6xl mb-4">🪷</div>
-            <h2 className="text-2xl font-bold bg-gradient-to-r from-shakti-400 to-violet-400 bg-clip-text text-transparent">Namaste! I'm Shakti</h2>
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-shakti-400 to-violet-400 bg-clip-text text-transparent">Namaste{preferredName ? `, ${preferredName}` : (user?.displayName ? `, ${user.displayName.split(' ')[0]}` : '')}! I'm Shakti</h2>
             <p className="text-gray-400 mt-2 max-w-md text-sm">Your AI life companion across Health, Finance & Career. Ask me anything relevant to women in India.</p>
             <div className="flex gap-3 mt-6">
               {Object.entries(PILLAR_STYLES).map(([k,v]) => (
@@ -402,15 +632,156 @@ function TraceView() {
 }
 
 // ═══════════════════════════════════════
+// AUTH HOOK
+// ═══════════════════════════════════════
+function useAuth() {
+  const [user, setUser] = useState(null);
+  const [idToken, setIdToken] = useState(() => localStorage.getItem('shakti_token'));
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    const initAuth = () => {
+      if (!window.__shakti_auth) {
+        setTimeout(initAuth, 100);
+        return;
+      }
+      const { auth, onAuthStateChanged } = window.__shakti_auth;
+      onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          setUser(firebaseUser);
+          const token = await firebaseUser.getIdToken();
+          setIdToken(token);
+          localStorage.setItem('shakti_token', token);
+        } else {
+          setUser(null);
+          setIdToken(null);
+          localStorage.removeItem('shakti_token');
+        }
+        setAuthReady(true);
+      });
+    };
+    initAuth();
+  }, []);
+
+  const signIn = async () => {
+    if (!window.__shakti_auth) return;
+    const { auth, provider, signInWithPopup } = window.__shakti_auth;
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      console.error('Sign-in failed:', e);
+    }
+  };
+
+  const signOutUser = async () => {
+    if (!window.__shakti_auth) return;
+    const { auth, signOut } = window.__shakti_auth;
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error('Sign-out failed:', e);
+    }
+  };
+
+  return { user, idToken, authReady, signIn, signOut: signOutUser };
+}
+
+// ═══════════════════════════════════════
+// SIGN-IN PROMPT
+// ═══════════════════════════════════════
+function SignInPrompt({ onSignIn }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-[calc(100vh-72px)] text-center px-4">
+      <div className="glass rounded-2xl p-8 max-w-md w-full glow-pink">
+        <div className="text-6xl mb-4">🪷</div>
+        <h2 className="text-2xl font-bold bg-gradient-to-r from-shakti-400 to-violet-400 bg-clip-text text-transparent mb-3">Welcome to ShaktiAgent</h2>
+        <p className="text-gray-400 text-sm mb-6">Sign in with Google to start chatting with your AI life companion.</p>
+        <button onClick={onSignIn}
+          className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white text-gray-800 rounded-xl font-semibold text-sm hover:bg-gray-100 transition-all hover:scale-[1.02] shadow-lg">
+          <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Sign in with Google
+        </button>
+        <p className="text-[11px] text-gray-500 mt-4">Your data is secure. We only use your account for authentication.</p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════
 function App() {
   const [tab, setTab] = useState('chat');
+  const { user, idToken, authReady, signIn, signOut } = useAuth();
+  const [onboardingComplete, setOnboardingComplete] = useState(null); // null = not checked yet
+  const [checkingOnboarding, setCheckingOnboarding] = useState(false);
   const tabs = [
     { id:'chat', label:'Chat', icon:'💬' },
     { id:'dashboard', label:'Dashboard', icon:'📊' },
     { id:'traces', label:'Traces', icon:'🔍' },
   ];
+
+  // Check onboarding state when user signs in
+  useEffect(() => {
+    if (user && idToken) {
+      checkOnboarding();
+    } else {
+      setOnboardingComplete(null);
+    }
+  }, [user, idToken]);
+
+  const checkOnboarding = async () => {
+    setCheckingOnboarding(true);
+    try {
+      const res = await fetch(`${API}/onboarding/state`, {
+        headers: { 'Authorization': `Bearer ${idToken}` }
+      });
+      const data = await res.json();
+      setOnboardingComplete(data.complete);
+    } catch(e) {
+      console.error('Failed to check onboarding:', e);
+      setOnboardingComplete(true); // Default to complete on error
+    }
+    setCheckingOnboarding(false);
+  };
+
+  const handleOnboardingComplete = () => {
+    setOnboardingComplete(true);
+  };
+
+  const renderChatContent = () => {
+    if (!authReady) {
+      return (
+        <div className="flex items-center justify-center h-[calc(100vh-72px)] text-gray-500">
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1"></div>
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1" style={{animationDelay:'0.2s'}}></div>
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-3" style={{animationDelay:'0.4s'}}></div>
+          Loading...
+        </div>
+      );
+    }
+
+    if (!user) {
+      return <SignInPrompt onSignIn={signIn}/>;
+    }
+
+    if (checkingOnboarding || onboardingComplete === null) {
+      return (
+        <div className="flex items-center justify-center h-[calc(100vh-72px)] text-gray-500">
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1"></div>
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-1" style={{animationDelay:'0.2s'}}></div>
+          <div className="thinking-dot inline-block w-2 h-2 rounded-full bg-shakti-400 mr-3" style={{animationDelay:'0.4s'}}></div>
+          Loading...
+        </div>
+      );
+    }
+
+    if (!onboardingComplete) {
+      return <OnboardingView idToken={idToken} onComplete={handleOnboardingComplete}/>;
+    }
+
+    return <ChatView idToken={idToken} user={user}/>;
+  };
 
   return (
     <div className="min-h-screen">
@@ -424,19 +795,38 @@ function App() {
               <p className="text-[10px] text-gray-500 tracking-wider uppercase">AI Life Companion for Women</p>
             </div>
           </div>
-          <nav className="flex gap-1">
-            {tabs.map(t => (
-              <button key={t.id} id={`nav-${t.id}`} onClick={()=>setTab(t.id)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab===t.id ? 'bg-shakti-600/20 text-shakti-300 border border-shakti-500/20' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}>
-                {t.icon} {t.label}
-              </button>
-            ))}
-          </nav>
+          <div className="flex items-center gap-3">
+            <nav className="flex gap-1">
+              {tabs.map(t => (
+                <button key={t.id} id={`nav-${t.id}`} onClick={()=>setTab(t.id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab===t.id ? 'bg-shakti-600/20 text-shakti-300 border border-shakti-500/20' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}>
+                  {t.icon} {t.label}
+                </button>
+              ))}
+            </nav>
+            {/* Auth Button */}
+            {authReady && (
+              user ? (
+                <div className="flex items-center gap-2 ml-2 pl-2 border-l border-white/10">
+                  <img src={user.photoURL} alt="" className="w-7 h-7 rounded-full border border-white/20"/>
+                  <button onClick={signOut} className="text-xs text-gray-400 hover:text-gray-200 transition px-2 py-1 rounded hover:bg-white/5" title="Sign out">
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <button onClick={signIn}
+                  className="ml-2 px-4 py-2 bg-white/10 hover:bg-white/15 border border-white/10 rounded-lg text-xs font-medium text-gray-300 transition-all flex items-center gap-2">
+                  <svg className="w-4 h-4" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                  Sign in
+                </button>
+              )
+            )}
+          </div>
         </div>
       </header>
 
       {/* Views */}
-      {tab === 'chat' && <ChatView/>}
+      {tab === 'chat' && renderChatContent()}
       {tab === 'dashboard' && <DashboardView/>}
       {tab === 'traces' && <TraceView/>}
     </div>
