@@ -566,6 +566,25 @@ async def tool_execute(req: ToolExecuteRequest, user: dict = Depends(verify_toke
 
 
 # ═══════════════════════════════════════════════════════
+# SESSION RESET (for "New chat" button)
+# ═══════════════════════════════════════════════════════
+
+class SessionResetRequest(BaseModel):
+    session_id: str
+
+@app.post("/session/reset")
+async def session_reset(req: SessionResetRequest, user: dict = Depends(verify_token)):
+    """Clear the orchestrator session state for a given session_id.
+    Called when user clicks 'New chat' to ensure the backend doesn't
+    carry over follow-up context from the previous conversation.
+    """
+    from orchestrator import _clear_session_state
+    _clear_session_state(req.session_id)
+    logger.info(f"Session state cleared for {req.session_id}")
+    return JSONResponse(content={"ok": True, "session_id": req.session_id})
+
+
+# ═══════════════════════════════════════════════════════
 # FRONTEND SERVING
 # ═══════════════════════════════════════════════════════
 

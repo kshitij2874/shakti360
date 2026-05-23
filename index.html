@@ -1335,20 +1335,50 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     }
   };
 
-  const handleNewConversation = () => {
+  const handleNewConversation = async () => {
     if (messages.length === 0) return;
-    const ok = window.confirm("Start a new conversation? Your current chat will be cleared from this device.");
+    const ok = window.confirm("Start a new conversation? Your current chat will be cleared.");
     if (!ok) return;
+    
+    // Clear backend session state first
+    const oldSid = sessionId;
+    const fresh = crypto.randomUUID().substring(0, 12);
+    
+    try {
+      await fetch(`${API}/session/reset`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ session_id: oldSid }),
+      });
+    } catch (e) {
+      // Best-effort — frontend reset is what matters most
+      console.warn('Backend session reset failed:', e);
+    }
+    
+    // Clear frontend state
     setMessages([]);
     setShowGreeting(false);
     setInput('');
     setThinkingSteps([]);
-    const fresh = crypto.randomUUID().substring(0, 12);
     setSessionId(fresh);
+    
     try {
       localStorage.removeItem(MSG_KEY);
       localStorage.setItem(SID_KEY, fresh);
     } catch (e) {}
+    
+    // Refetch greeting for the new session
+    try {
+      const gRes = await fetch(`${API}/greeting`, { headers: authHeaders });
+      const gData = await gRes.json();
+      if (gData.greeting) {
+        setGreeting(gData);
+        setShowGreeting(true);
+      }
+    } catch (e) {
+      console.warn('Greeting refetch failed:', e);
+    }
+    
     inputRef.current?.focus();
   };
 

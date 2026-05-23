@@ -342,8 +342,11 @@ async def process_query(
         )
 
     if is_followup:
-        # Same topic — skip clarifying, route to agent with prior context
-        logger.info(f"Detected follow-up on {last_pillar}: '{query[:60]}'")
+        # Same topic — skip clarifying, but RE-CLASSIFY the new query's intent
+        # so we route to the correct agent (not the old one)
+        new_intent = await classify_intent(query)
+        logger.info(f"Follow-up detected. Re-classified intent: {new_intent} (was {last_pillar})")
+        
         # Build conversation history into the enriched query
         prior_qa = state.get("qa_pairs", []) or []
         followup_history = list(prior_qa)
@@ -360,13 +363,14 @@ async def process_query(
         _set_session_state(session_id, {
             **state,
             "phase": "answering",
+            "pillar": new_intent,  # Use the NEW intent, not the old one
         })
 
         return await _generate_full_answer(
             user_id=user_id,
             age_band=age_band,
-            query=last_query,
-            pillar=last_pillar,
+            query=query,  # Use the NEW query, not the old one
+            pillar=new_intent,  # Route to the correct agent
             qa_pairs=followup_history,
             session_id=session_id,
             start_time=start_time,
@@ -379,38 +383,57 @@ async def process_query(
 
 
 async def _is_followup(*, new_query: str, last_query: str, last_pillar: str) -> bool:
-    """Best-effort detection: does new_query continue the last conversation?"""
+    """Conservative follow-up detection.
+    
+    Only returns True when the new message is clearly a continuation of the
+    SAME topic — not when it's a fresh question about a different pillar.
+    
+    Uses LLM as primary signal. Cheap heuristics are only for obvious cases
+    like single-word affirmations.
+    """
     q = (new_query or "").strip().lower()
     if not q:
         return False
 
-    # Cheap heuristics first
-    short_followups = (
+    # Only the most obvious single-word follow-ups — NOT "why", "how", "more"
+    # which could be about anything
+    obvious_followups = (
         "yes", "no", "ok", "okay", "sure", "thanks", "thank you",
-        "more", "tell me more", "go on", "and?", "why", "how",
+        "go on", "continue", "next", "skip", "done",
     )
-    if q in short_followups or len(q) < 6:
+    if q in obvious_followups:
         return True
 
-    referential = ("this ", "that ", "it ", "these ", "those ", "and ", "but ",
-                   "what about", "what if", "why ", "how ")
-    if q.startswith(referential):
+    # Very short referential phrases that ONLY make sense in context
+    strictly_referential = (
+        "tell me more about that",
+        "what else",
+        "anything else",
+        "and then",
+        "what about that",
+    )
+    if q in strictly_referential:
         return True
 
-    # LLM tiebreaker for ambiguous cases
+    # For everything else — use LLM to decide. This is the primary signal.
     try:
-        from clarifier import _call_gemini as _gemini  # reuse helper
+        from clarifier import _call_gemini as _gemini
         prompt = (
-            "A user just received an answer about a topic. They sent another message.\n"
-            f"Topic of previous answer: {last_pillar}\n"
-            f"Previous question: \"{last_query[:200]}\"\n"
-            f"New message: \"{new_query[:200]}\"\n\n"
-            "Is the new message a follow-up on the same topic, or a fresh "
-            "unrelated question? Reply with EXACTLY one word: 'followup' or 'new'."
+            "A user is chatting with a women's life companion AI.\n"
+            f"Their PREVIOUS topic was: {last_pillar}\n"
+            f"Their PREVIOUS question: \"{last_query[:200]}\"\n"
+            f"Their NEW message: \"{new_query[:200]}\"\n\n"
+            "Is the NEW message clearly about the SAME topic as the previous "
+            "question? Or is it a fresh, unrelated question about a different "
+            "topic (e.g. switching from health to finance, or from career to health)?\n\n"
+            "Reply with EXACTLY one word: 'followup' if same topic, 'new' if different topic."
         )
         raw = (await _gemini(prompt, max_tokens=5, temperature=0.0)).strip().lower()
+        logger.info(f"Follow-up LLM decision: '{raw}' for query '{new_query[:60]}'")
         return raw.startswith("followup")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Follow-up LLM check failed: {e}")
+        # If LLM fails, default to NOT follow-up (safer to re-clarify)
         return False
 
 
