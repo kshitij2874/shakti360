@@ -46,11 +46,21 @@ async def classify_intent(query: str) -> str:
     Uses gemini-2.5-flash with max_output_tokens=5.
     """
     try:
-        from vertexai.generative_models import GenerativeModel  # type: ignore
+        from vertexai.generative_models import GenerativeModel, SafetySetting, HarmCategory, HarmBlockThreshold  # type: ignore
         model = GenerativeModel(DEFAULT_MODEL)
+        
+        # Configure safety settings to avoid blocking benign queries
+        safety_settings = [
+            SafetySetting(category=HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=HarmBlockThreshold.BLOCK_NONE),
+            SafetySetting(category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=HarmBlockThreshold.BLOCK_NONE),
+            SafetySetting(category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=HarmBlockThreshold.BLOCK_NONE),
+            SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=HarmBlockThreshold.BLOCK_NONE),
+        ]
+        
         response = model.generate_content(
             f"{CLASSIFIER_PROMPT}\n\nUser query: {query}",
             generation_config={"max_output_tokens": 5, "temperature": 0.0},
+            safety_settings=safety_settings,
         )
         intent = response.text.strip().upper()
         if intent in ("HEALTH", "FINANCE", "CAREER"):
@@ -69,7 +79,8 @@ async def classify_intent(query: str) -> str:
                   "scss", "nps", "interest rate", "return"]
     career_kw = ["job", "career", "scholarship", "course", "study", "college", "intern",
                  "resume", "interview", "skill", "returnship", "mentor", "business",
-                 "entrepreneur", "startup", "freelance", "training", "work", "back to work", "working", "employment"]
+                 "entrepreneur", "startup", "freelance", "training", "work", "back to work", "working", "employment",
+                 "consulting", "consultant", "retirement", "retire"]
 
     scores = {
         "HEALTH": sum(1 for kw in health_kw if kw in q),
