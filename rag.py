@@ -7,6 +7,7 @@ Hierarchical chunking: section headers → paragraphs → metadata.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -235,9 +236,11 @@ async def ingest_documents() -> int:
                         source_file=doc_file.name,
                     )
 
-                    for chunk in chunks:
-                        embedding = await get_embedding(chunk["content"])
-                        chunk["embedding"] = embedding
+                    # Generate embeddings in parallel for all chunks of the document
+                    tasks = [get_embedding(chunk["content"]) for chunk in chunks]
+                    embeddings = await asyncio.gather(*tasks)
+                    for chunk, emb in zip(chunks, embeddings):
+                        chunk["embedding"] = emb
                         _local_vectors.append(chunk)
 
                     total_chunks += len(chunks)

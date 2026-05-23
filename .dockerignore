@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+.git/
+*.log
+.pytest_cache/
+node_modules/
+.idea/
+.vscode/
+*.bak
+test_smoke.py
+docs/.cache/
