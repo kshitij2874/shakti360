@@ -13,6 +13,7 @@ from observability import observe
 from rag import retrieve, format_context
 from tools import get_helplines
 from dual_user import get_framing_for_user
+from response_builder import build_full_response
 
 logger = logging.getLogger("shakti.agents.career")
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -39,48 +40,30 @@ async def run(
     """
     # 1. Retrieve RAG context
     rag_chunks = await retrieve(query=query, pillar="CAREER", age_band=age_band)
-    context = format_context(rag_chunks)
 
     # 2. Build dual-user framing
     user_ctx, framing_prefix = await get_framing_for_user(user_id)
 
-    # 3. Build prompt
-    prompt = (
-        f"{framing_prefix}"
-        f"{SYSTEM_PROMPT}\n\n"
-        f"User age band: {age_band}\n"
-        f"User memory context: {user_memory_context}\n\n"
-        f"{context}\n\n"
-        f"User query: {query}\n\n"
-        "Respond with practical career guidance. Cite every scheme, "
-        "scholarship, or program. Suggest concrete next steps."
+    # 3. Build structured response with no-truncation guarantees
+    structured = await build_full_response(
+        pillar="CAREER",
+        age_band=age_band,
+        query=query,
+        clarifying_qa=[],
+        rag_chunks=rag_chunks,
+        persona_prefix=SYSTEM_PROMPT,
+        framing_prefix=framing_prefix,
+        memory_context=user_memory_context,
+        fallback_system_prompt=SYSTEM_PROMPT,
+        model_name=DEFAULT_MODEL,
     )
 
-    # 3. Call LLM
-    response_text = ""
+    response_text = structured["answer"]
+    citation_chips = structured["citations"]
+    next_steps = structured["next_steps"]
+
+    # 4. Detect tool calls (rule-based)
     tools_to_call: list[dict[str, Any]] = []
-
-    try:
-        from vertexai.generative_models import GenerativeModel  # type: ignore
-        model = GenerativeModel(DEFAULT_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={"max_output_tokens": 800, "temperature": 0.3},
-        )
-        response_text = response.text.strip()
-    except Exception as e:
-        logger.warning(f"LLM call failed: {e}")
-        response_text = (
-            f"Here's career guidance for your question on '{query}' "
-            f"for the {age_band} age group:\n\n"
-        )
-        if rag_chunks:
-            for chunk in rag_chunks[:2]:
-                response_text += f"• {chunk['content'][:200]}...\n\n"
-            response_text += f"Source: {rag_chunks[0].get('source_ref', 'Government career resources')}\n\n"
-        response_text += "For more guidance, visit scholarships.gov.in or the National Career Service portal (ncs.gov.in)."
-
-    # 4. Detect tool calls
     query_lower = query.lower()
     scheme_keywords = {
         "pragati": "pragati", "scholarship": "pragati",
@@ -97,7 +80,7 @@ async def run(
             })
             break
 
-    # 5. Extract citations
+    # 5. Legacy citation strings
     citations = []
     for chunk in rag_chunks:
         source_ref = chunk.get("source_ref", "")
@@ -107,8 +90,11 @@ async def run(
     return {
         "response": response_text,
         "citations": citations,
+        "citation_chips": citation_chips,
+        "next_steps": next_steps,
         "tools_to_call": tools_to_call,
         "rag_sources": rag_chunks,
-        "model_used": DEFAULT_MODEL,
+        "model_used": structured.get("model_used", DEFAULT_MODEL),
         "pillar": "CAREER",
+        "diagnostics": structured.get("diagnostics", {}),
     }

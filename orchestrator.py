@@ -378,8 +378,11 @@ async def _generate_full_answer(
 
     response_text = agent_result.get("response", "")
     citations = agent_result.get("citations", [])
+    citation_chips = agent_result.get("citation_chips", [])
+    next_steps = agent_result.get("next_steps", [])
     tools_to_call = agent_result.get("tools_to_call", [])
     rag_sources = agent_result.get("rag_sources", [])
+    diagnostics = agent_result.get("diagnostics", {})
 
     # Step 4: Validate response
     steps.append({"step": "validating", "detail": "Validating response..."})
@@ -427,6 +430,8 @@ async def _generate_full_answer(
         "pillar": intent,
         "age_band": age_band,
         "citations": citations,
+        "citation_chips": citation_chips,
+        "next_steps": next_steps,
         "tools_to_call": tools_to_call,
         "awaiting_approval": len(tools_to_call) > 0,
         "session_id": session_id,
@@ -441,6 +446,7 @@ async def _generate_full_answer(
         "from_cache": False,
         "steps": steps,
         "clarifying_qa": qa_pairs,
+        "response_diagnostics": diagnostics,
     }
 
     # Record metrics

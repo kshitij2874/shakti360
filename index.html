@@ -244,14 +244,63 @@ function ThinkingIndicator({ steps }) {
 }
 
 // ─── Citation Chips ───
-function CitationChips({ citations }) {
-  if (!citations || citations.length === 0) return null;
+function CitationChips({ chips, citations }) {
+  // Prefer structured chips ({label, source, section}); fall back to legacy strings
+  let items = [];
+  if (Array.isArray(chips) && chips.length > 0) {
+    items = chips.map(c => ({
+      label: (c.label || '').toString().substring(0, 30),
+      title: c.source || c.section || '',
+    }));
+  } else if (Array.isArray(citations) && citations.length > 0) {
+    items = citations.map(c => {
+      const label = (c || '').replace(/\[Source:\s*/i, '').replace(/\]$/, '').split(',')[0].trim().substring(0, 30);
+      return { label, title: c };
+    });
+  }
+  if (items.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2">
-      {citations.map((c, i) => {
-        const label = c.replace(/\[Source:\s*/i,'').replace(/\]$/,'').split(',')[0].trim().substring(0,30);
-        return <span key={i} className="kalpana-source-chip">{label}</span>;
-      })}
+    <div className="flex flex-wrap gap-1.5 mt-3">
+      {items.map((it, i) => (
+        <span key={i} className="kalpana-source-chip" title={it.title}>{it.label}</span>
+      ))}
+    </div>
+  );
+}
+
+// ─── Next-Step Suggestion Cards ───
+function NextStepsCards({ steps, onPick }) {
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+  return (
+    <div className="mt-4 space-y-2">
+      {steps.map((s, i) => (
+        <button key={i} onClick={() => onPick && onPick(s)}
+          className="w-full text-left rounded-xl px-4 py-3 text-sm transition-all hover:-translate-y-0.5 flex items-center justify-between gap-3"
+          style={{background:'white', border:'1.5px solid var(--kalpana-rose-100)', color:'var(--kalpana-text)', boxShadow:'0 1px 3px rgba(233, 78, 138, 0.05)'}}>
+          <span className="flex-1">{s.label}</span>
+          <span style={{color:'var(--kalpana-rose-500)'}}>→</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Feedback Bar ───
+function FeedbackBar({ onFeedback }) {
+  const [chosen, setChosen] = useState(null);
+  if (chosen) {
+    return (
+      <div className="mt-3 text-xs italic" style={{color:'var(--kalpana-text-soft)'}}>
+        Thanks for the feedback.
+      </div>
+    );
+  }
+  const pick = (v) => { setChosen(v); if (onFeedback) onFeedback(v); };
+  return (
+    <div className="flex items-center gap-3 mt-3 text-xs" style={{color:'var(--kalpana-text-soft)'}}>
+      <span>Was this helpful?</span>
+      <button onClick={() => pick('up')} className="hover:scale-110 transition" title="Helpful">👍</button>
+      <button onClick={() => pick('down')} className="hover:scale-110 transition" title="Not helpful">👎</button>
     </div>
   );
 }
@@ -281,10 +330,11 @@ function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
 }
 
 // ─── Chat Message ───
-function ChatMessage({ msg, isLatest, onQuickReply }) {
+function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback }) {
   const isUser = msg.role === 'user';
   const pillar = PILLAR_STYLES[msg.pillar] || {};
   const isClarifying = !isUser && msg.type === 'clarifying_question';
+  const isAnswer = !isUser && (!msg.type || msg.type === 'answer');
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} fade-in`}>
@@ -297,14 +347,18 @@ function ChatMessage({ msg, isLatest, onQuickReply }) {
             )}
           </div>
         )}
-        {!isUser && !isClarifying && msg.pillar && (
+        {isAnswer && msg.pillar && (
           <div className={`kalpana-badge ${pillar.badge} mb-2`}>
             {pillar.icon} {pillar.label || msg.pillar}
           </div>
         )}
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
-        {/* Quick reply pills for yes/no clarifying questions, only on the latest one */}
-        {!isUser && isClarifying && isLatest && msg.is_yes_no && onQuickReply && (
+        {/* Full answer text — whitespace-pre-wrap, never truncated */}
+        <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{wordBreak:'break-word'}}>
+          {msg.content}
+        </div>
+
+        {/* Quick reply pills for yes/no clarifying questions, only on the latest */}
+        {isClarifying && isLatest && msg.is_yes_no && onQuickReply && (
           <div className="flex gap-2 mt-3 flex-wrap">
             <button onClick={() => onQuickReply('Yes')} className="kalpana-btn-secondary text-xs py-1.5 px-3">Yes</button>
             <button onClick={() => onQuickReply('No')} className="kalpana-btn-secondary text-xs py-1.5 px-3">No</button>
@@ -312,17 +366,25 @@ function ChatMessage({ msg, isLatest, onQuickReply }) {
           </div>
         )}
         {/* Skip button for open-ended clarifying questions */}
-        {!isUser && isClarifying && isLatest && !msg.is_yes_no && onQuickReply && (
+        {isClarifying && isLatest && !msg.is_yes_no && onQuickReply && (
           <div className="flex gap-2 mt-3">
             <button onClick={() => onQuickReply('Skip')} className="text-xs py-1.5 px-3 rounded-xl transition" style={{color:'var(--kalpana-text-soft)', background:'transparent', border:'1px dashed var(--kalpana-rose-100)'}}>Skip this</button>
           </div>
         )}
-        {!isUser && !isClarifying && <CitationChips citations={msg.citations}/>}
-        {!isUser && msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
-          <ApprovalCard tools={msg.tools_to_call} sessionId={msg.session_id} onApprove={msg.onApprove} onReject={msg.onReject}/>
-        )}
-        {!isUser && !isClarifying && msg.latency_ms && (
-          <div className="text-[10px] mt-2" style={{color:'var(--kalpana-text-soft)'}}>{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
+
+        {/* Answer-only affordances */}
+        {isAnswer && (
+          <>
+            <CitationChips chips={msg.citation_chips} citations={msg.citations}/>
+            <FeedbackBar onFeedback={(v) => onFeedback && onFeedback(msg, v)}/>
+            <NextStepsCards steps={msg.next_steps} onPick={(s) => onPickNextStep && onPickNextStep(s)}/>
+            {msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
+              <ApprovalCard tools={msg.tools_to_call} sessionId={msg.session_id} onApprove={msg.onApprove} onReject={msg.onReject}/>
+            )}
+            {msg.latency_ms && (
+              <div className="text-[10px] mt-3" style={{color:'var(--kalpana-text-soft)'}}>{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -637,6 +699,27 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     inputRef.current?.focus();
   };
 
+  const handlePickNextStep = (step) => {
+    // Send the suggestion's label as the user's next message — this starts
+    // a fresh clarifying flow for the new topic.
+    if (!step || !step.label) return;
+    submitValue(step.label);
+  };
+
+  const handleFeedback = (msg, value) => {
+    // Lightweight feedback — log to console for now (Langfuse pickup happens server-side)
+    console.log('Feedback:', value, 'for session', msg?.session_id);
+    try {
+      fetch(`${API}/feedback`, {
+        method:'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ session_id: msg?.session_id, value }),
+      }).catch(() => {}); // best-effort, endpoint may not exist
+    } catch (e) {
+      // ignore
+    }
+  };
+
   const handleSwitchMode = async () => {
     const ok = window.confirm(
       "Switch who Kalpana is helping?\n\nThis will restart the short setup conversation so we can re-tune for you."
@@ -693,6 +776,8 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           content: data.response,
           pillar: data.pillar,
           citations: data.citations,
+          citation_chips: data.citation_chips,
+          next_steps: data.next_steps,
           tools_to_call: data.tools_to_call,
           awaiting_approval: data.awaiting_approval,
           session_id: data.session_id,
@@ -785,6 +870,8 @@ function ChatView({ idToken, user, onResetOnboarding }) {
             msg={m}
             isLatest={i === messages.length - 1}
             onQuickReply={submitValue}
+            onPickNextStep={handlePickNextStep}
+            onFeedback={handleFeedback}
           />
         ))}
         {thinkingSteps.length > 0 && <ThinkingIndicator steps={thinkingSteps}/>}

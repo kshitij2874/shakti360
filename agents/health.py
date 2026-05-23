@@ -13,6 +13,7 @@ from observability import observe
 from rag import retrieve, format_context
 from tools import get_helplines
 from dual_user import get_framing_for_user
+from response_builder import build_full_response
 
 logger = logging.getLogger("shakti.agents.health")
 
@@ -51,55 +52,31 @@ async def run(
     """
     # 1. Retrieve RAG context filtered by pillar=HEALTH + age_band
     rag_chunks = await retrieve(query=query, pillar="HEALTH", age_band=age_band)
-    context = format_context(rag_chunks)
 
     # 2. Build dual-user framing
     user_ctx, framing_prefix = await get_framing_for_user(user_id)
 
-    # 3. Build prompt
-    helplines = get_helplines()
-    prompt = (
-        f"{framing_prefix}"
-        f"{SYSTEM_PROMPT}\n\n"
-        f"User age band: {age_band}\n"
-        f"User memory context: {user_memory_context}\n\n"
-        f"{context}\n\n"
-        f"Emergency helplines: Women's Helpline {helplines['women_helpline']}, "
-        f"Ambulance {helplines['ambulance']}, Emergency {helplines['emergency']}\n\n"
-        f"User query: {query}\n\n"
-        "Respond helpfully, cite sources, and suggest next steps."
+    # 3. Build structured response with no-truncation guarantees
+    model_name = _get_model_name()
+    structured = await build_full_response(
+        pillar="HEALTH",
+        age_band=age_band,
+        query=query,
+        clarifying_qa=[],  # already inlined into query by orchestrator
+        rag_chunks=rag_chunks,
+        persona_prefix=SYSTEM_PROMPT,
+        framing_prefix=framing_prefix,
+        memory_context=user_memory_context,
+        fallback_system_prompt=SYSTEM_PROMPT,
+        model_name=(model_name if model_name != "medgemma" else DEFAULT_MODEL),
     )
 
-    # 3. Call LLM
-    model_name = _get_model_name()
-    response_text = ""
+    response_text = structured["answer"]
+    citation_chips = structured["citations"]
+    next_steps = structured["next_steps"]
+
+    # 4. Detect if tool calls are needed (cheap rule-based)
     tools_to_call: list[dict[str, Any]] = []
-
-    try:
-        from vertexai.generative_models import GenerativeModel  # type: ignore
-        model = GenerativeModel(model_name if model_name != "medgemma" else DEFAULT_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={"max_output_tokens": 800, "temperature": 0.3},
-        )
-        response_text = response.text.strip()
-    except Exception as e:
-        logger.warning(f"LLM call failed: {e}")
-        response_text = (
-            f"I'd like to help with your health question about '{query}'. "
-            f"Based on available information for women in the {age_band} age group:\n\n"
-        )
-        # Build response from RAG context
-        if rag_chunks:
-            for chunk in rag_chunks[:2]:
-                response_text += f"• {chunk['content'][:200]}...\n\n"
-            response_text += f"Source: {rag_chunks[0].get('source_ref', 'Government health guidelines')}\n\n"
-        response_text += (
-            "For detailed medical guidance, please consult a healthcare professional.\n"
-            f"Women's Helpline: {helplines['women_helpline']} | Ambulance: {helplines['ambulance']}"
-        )
-
-    # 4. Detect if tool calls are needed
     query_lower = query.lower()
     if any(w in query_lower for w in ["clinic", "hospital", "doctor near", "nearby"]):
         tools_to_call.append({
@@ -113,7 +90,6 @@ async def run(
             "params": {},
             "reason": "User may need safety assistance.",
         })
-    # Check for scheme lookups
     scheme_keywords = ["jsy", "janani", "pmjay", "ayushman", "pmmvy", "maternity scheme"]
     for kw in scheme_keywords:
         if kw in query_lower:
@@ -124,7 +100,7 @@ async def run(
             })
             break
 
-    # 5. Extract citations from RAG sources
+    # 5. Extract legacy citation strings (for validators) from RAG sources
     citations = []
     for chunk in rag_chunks:
         source_ref = chunk.get("source_ref", "")
@@ -134,8 +110,11 @@ async def run(
     return {
         "response": response_text,
         "citations": citations,
+        "citation_chips": citation_chips,
+        "next_steps": next_steps,
         "tools_to_call": tools_to_call,
         "rag_sources": rag_chunks,
-        "model_used": model_name,
+        "model_used": structured.get("model_used", model_name),
         "pillar": "HEALTH",
+        "diagnostics": structured.get("diagnostics", {}),
     }
