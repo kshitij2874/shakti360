@@ -13,6 +13,7 @@ from observability import observe
 from rag import retrieve, format_context
 from tools import get_helplines
 from dual_user import get_framing_for_user
+from persona import get_persona_prefix
 from response_builder import build_full_response
 
 logger = logging.getLogger("shakti.agents.career")
@@ -41,8 +42,10 @@ async def run(
     # 1. Retrieve RAG context
     rag_chunks = await retrieve(query=query, pillar="CAREER", age_band=age_band)
 
-    # 2. Build dual-user framing
+    # 2. Build dual-user framing + age-tuned persona
     user_ctx, framing_prefix = await get_framing_for_user(user_id)
+    persona_prefix = await get_persona_prefix(user_id)
+    combined_persona = (persona_prefix + "\n\n" + SYSTEM_PROMPT).strip()
 
     # 3. Build structured response with no-truncation guarantees
     structured = await build_full_response(
@@ -51,7 +54,7 @@ async def run(
         query=query,
         clarifying_qa=[],
         rag_chunks=rag_chunks,
-        persona_prefix=SYSTEM_PROMPT,
+        persona_prefix=combined_persona,
         framing_prefix=framing_prefix,
         memory_context=user_memory_context,
         fallback_system_prompt=SYSTEM_PROMPT,
