@@ -35,6 +35,7 @@ _firestore_available = False
 
 # ── Vertex AI Availability ──
 _vertex_available = True
+_embedding_model = None
 
 
 
@@ -59,15 +60,17 @@ def _get_firestore():
 
 async def get_embedding(text: str) -> list[float]:
     """Generate embedding via Vertex AI or deterministic 768-dim mock."""
-    global _vertex_available
+    global _vertex_available, _embedding_model
     if not text or not text.strip():
         text = "empty"
     
     if _vertex_available:
         try:
-            from vertexai.language_models import TextEmbeddingModel
-            model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
-            result = model.get_embeddings([text])
+            if _embedding_model is None:
+                from vertexai.language_models import TextEmbeddingModel
+                _embedding_model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, _embedding_model.get_embeddings, [text])
             return result[0].values
         except Exception as e:
             logger.warning(f"Vertex embedding failed, using mock: {e}")
@@ -85,6 +88,51 @@ async def get_embedding(text: str) -> list[float]:
                 embedding.append(int(hex_pair, 16) / 255.0)
         seed = seed_hash
     return embedding[:768]
+
+async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
+    """Generate embeddings for a list of texts in a single batch call via Vertex AI or fallback to mock."""
+    global _vertex_available, _embedding_model
+    if not texts:
+        return []
+        
+    if _vertex_available:
+        try:
+            if _embedding_model is None:
+                from vertexai.language_models import TextEmbeddingModel
+                _embedding_model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
+            
+            results = []
+            batch_size = 250
+            for i in range(0, len(texts), batch_size):
+                batch_texts = [t or "empty" for t in texts[i:i+batch_size]]
+                loop = asyncio.get_event_loop()
+                batch_result = await loop.run_in_executor(
+                    None, 
+                    _embedding_model.get_embeddings, 
+                    batch_texts
+                )
+                results.extend([r.values for r in batch_result])
+            return results
+        except Exception as e:
+            logger.warning(f"Vertex batch embedding failed, falling back to mock: {e}")
+            _vertex_available = False
+            
+    # Mock fallback
+    results = []
+    for text in texts:
+        embedding = []
+        seed = (text or "empty").lower().strip()
+        while len(embedding) < 768:
+            seed_hash = hashlib.sha256(seed.encode()).hexdigest()
+            for i in range(0, len(seed_hash) - 1, 2):
+                if len(embedding) >= 768:
+                    break
+                hex_pair = seed_hash[i:i+2]
+                if len(hex_pair) == 2:
+                    embedding.append(int(hex_pair, 16) / 255.0)
+            seed = seed_hash
+        results.append(embedding[:768])
+    return results
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
@@ -236,9 +284,9 @@ async def ingest_documents() -> int:
                         source_file=doc_file.name,
                     )
 
-                    # Generate embeddings in parallel for all chunks of the document
-                    tasks = [get_embedding(chunk["content"]) for chunk in chunks]
-                    embeddings = await asyncio.gather(*tasks)
+                    # Generate embeddings in a single batch call for the document
+                    texts = [chunk["content"] for chunk in chunks]
+                    embeddings = await get_embeddings_batch(texts)
                     for chunk, emb in zip(chunks, embeddings):
                         chunk["embedding"] = emb
                         _local_vectors.append(chunk)
