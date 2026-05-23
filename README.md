@@ -131,4 +131,16 @@ All agent functions are instrumented with `@observe()`:
 
 ---
 
+## 🚀 CI/CD
+
+Auto-deploy via Cloud Build on every `git push` to `main`.
+
+```
+git push → Cloud Build → Build container → Push to GCR → Deploy to Cloud Run
+```
+
+Watch builds: https://console.cloud.google.com/cloud-build/builds?project=shakti360
+
+---
+
 Built with ❤️ for DeployFest 2026 | GDG Cloud Bengaluru
