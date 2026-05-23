@@ -118,6 +118,15 @@ async def run(
             "params": {"mood": "neutral", "stress_level": "moderate", "sleep_quality": "fair", "social_support": "moderate", "recent_changes": []},
             "reason": "User is expressing mental health concerns.",
         })
+    
+    # Tavily web search - when query needs up-to-date health information
+    # Triggers on: latest research, new treatments, recent findings, current statistics
+    if any(w in query_lower for w in ["latest", "recent", "new treatment", "research", "study", "statistics", "current", "update", "news", "vaccine", "outbreak", "pandemic"]):
+        tools_to_call.append({
+            "tool": "tavily_search_health",
+            "params": {"query": query, "max_results": 5},
+            "reason": "Query needs up-to-date health information that may not be in RAG.",
+        })
 
     # 5. Extract legacy citation strings (for validators) from RAG sources
     citations = []

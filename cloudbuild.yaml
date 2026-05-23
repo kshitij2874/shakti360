@@ -30,7 +30,7 @@ steps:
       - '--min-instances=0'
       - '--max-instances=3'
       - '--service-account=shakti-agent-sa@$PROJECT_ID.iam.gserviceaccount.com'
-      - '--update-secrets=MAPS_API_KEY=MAPS_API_KEY:latest,LANGFUSE_PUBLIC_KEY=LANGFUSE_PUBLIC_KEY:latest,LANGFUSE_SECRET_KEY=LANGFUSE_SECRET_KEY:latest'
+      - '--update-secrets=MAPS_API_KEY=MAPS_API_KEY:latest,LANGFUSE_PUBLIC_KEY=LANGFUSE_PUBLIC_KEY:latest,LANGFUSE_SECRET_KEY=LANGFUSE_SECRET_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest'
       - '--set-env-vars=PROJECT_ID=$PROJECT_ID,LOCATION=asia-south1,VERTEX_LOCATION=us-central1,GEMINI_MODEL=gemini-2.5-flash,LANGFUSE_HOST=https://cloud.langfuse.com,RAG_BUCKET=shakti360-rag,USE_MEDGEMMA=false'
 
 images:

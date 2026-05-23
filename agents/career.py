@@ -109,6 +109,15 @@ async def run(
             "params": {"user_profile": {}, "scheme_type": "career"},
             "reason": "User is asking about career program eligibility.",
         })
+    
+    # Tavily web search - when query needs up-to-date career/job market information
+    # Triggers on: latest trends, current market, recent opportunities, news, updates
+    if any(w in query_lower for w in ["latest", "recent", "current", "trend", "market", "demand", "salary", "hiring", "layoff", "remote", "hybrid", "news", "update", "industry"]):
+        tools_to_call.append({
+            "tool": "tavily_search_career",
+            "params": {"query": query, "max_results": 5},
+            "reason": "Query needs up-to-date career/job market information that may not be in RAG.",
+        })
 
     # 5. Legacy citation strings
     citations = []

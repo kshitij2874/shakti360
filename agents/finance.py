@@ -113,6 +113,15 @@ async def run(
             "params": {"user_profile": {}, "scheme_type": "all"},
             "reason": "User is asking about scheme eligibility.",
         })
+    
+    # Tavily web search - when query needs up-to-date financial information
+    # Triggers on: latest rates, current market, recent changes, news, updates
+    if any(w in query_lower for w in ["latest", "recent", "current rate", "market", "stock", "mutual fund", "interest rate", "inflation", "budget", "tax", "news", "update", "rbi", "sebi"]):
+        tools_to_call.append({
+            "tool": "tavily_search_finance",
+            "params": {"query": query, "max_results": 5},
+            "reason": "Query needs up-to-date financial information that may not be in RAG.",
+        })
 
     # 5. Legacy citation strings (for validators)
     citations = []

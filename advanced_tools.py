@@ -16,6 +16,138 @@ logger = logging.getLogger("shakti.advanced_tools")
 
 
 # ═══════════════════════════════════════════════════════════
+# TAVILY WEB SEARCH (for all agents — reduces hallucination)
+# Uses Tavily's search API designed for AI agents
+# ═══════════════════════════════════════════════════════════
+
+async def tavily_web_search(
+    query: str,
+    search_depth: str = "basic",
+    max_results: int = 5,
+    topic: str = "general",
+) -> dict[str, Any]:
+    """Search the web using Tavily API for verified, up-to-date information.
+    
+    Args:
+        query: Search query string
+        search_depth: "basic" (fast) or "comprehensive" (thorough)
+        max_results: Number of results to return (1-10)
+        topic: "general", "news", or "finance"
+    
+    Returns:
+        Search results with titles, URLs, snippets, and answer
+    """
+    api_key = os.getenv("TAVILY_API_KEY", "")
+    if not api_key:
+        logger.warning("TAVILY_API_KEY not set — web search unavailable")
+        return {
+            "success": False,
+            "error": "Web search not configured. Please set TAVILY_API_KEY.",
+            "results": [],
+        }
+    
+    try:
+        from tavily import TavilyClient  # type: ignore
+        
+        # Run sync Tavily client in executor to avoid blocking
+        def _search():
+            client = TavilyClient(api_key=api_key)
+            response = client.search(
+                query=query,
+                search_depth=search_depth,
+                max_results=max_results,
+                topic=topic,
+                include_answer=True,
+                include_raw_content=False,
+            )
+            return response
+        
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _search)
+        
+        # Normalize results
+        results = []
+        for r in response.get("results", [])[:max_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("content", ""),
+                "score": r.get("score", 0),
+            })
+        
+        return {
+            "success": True,
+            "query": query,
+            "answer": response.get("answer", ""),
+            "results": results,
+            "total": len(results),
+            "source": "tavily",
+        }
+    except ImportError:
+        logger.error("tavily-python not installed. Run: pip install tavily-python")
+        return {
+            "success": False,
+            "error": "Web search library not installed.",
+            "results": [],
+        }
+    except Exception as e:
+        logger.error(f"Tavily search failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "results": [],
+        }
+
+
+async def tavily_search_health(
+    query: str,
+    max_results: int = 5,
+) -> dict[str, Any]:
+    """Health-focused web search using Tavily.
+    Adds health-specific context to the query for better results.
+    """
+    enhanced_query = f"women's health India {query} verified medical information"
+    return await tavily_web_search(
+        query=enhanced_query,
+        search_depth="basic",
+        max_results=max_results,
+        topic="general",
+    )
+
+
+async def tavily_search_finance(
+    query: str,
+    max_results: int = 5,
+) -> dict[str, Any]:
+    """Finance-focused web search using Tavily.
+    Adds India-specific financial context to the query.
+    """
+    enhanced_query = f"India finance {query} government scheme SEBI RBI verified"
+    return await tavily_web_search(
+        query=enhanced_query,
+        search_depth="basic",
+        max_results=max_results,
+        topic="finance",
+    )
+
+
+async def tavily_search_career(
+    query: str,
+    max_results: int = 5,
+) -> dict[str, Any]:
+    """Career-focused web search using Tavily.
+    Adds India-specific career and job market context.
+    """
+    enhanced_query = f"India career jobs {query} opportunities women verified"
+    return await tavily_web_search(
+        query=enhanced_query,
+        search_depth="basic",
+        max_results=max_results,
+        topic="general",
+    )
+
+
+# ═══════════════════════════════════════════════════════════
 # WEB SEARCH (for Career Agent — job board search)
 # Inspired by: awesome-llm-apps/starter_ai_agents/web_scraping_ai_agent
 # ═══════════════════════════════════════════════════════════
@@ -618,6 +750,10 @@ async def mental_wellbeing_check(
 # ═══════════════════════════════════════════════════════════
 
 ADVANCED_TOOL_REGISTRY = {
+    "tavily_web_search": tavily_web_search,
+    "tavily_search_health": tavily_search_health,
+    "tavily_search_finance": tavily_search_finance,
+    "tavily_search_career": tavily_search_career,
     "search_jobs_web": search_jobs_web,
     "analyze_budget": analyze_budget,
     "assess_health_risk": assess_health_risk,

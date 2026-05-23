@@ -447,6 +447,10 @@ const TOOL_LABELS = {
   assess_health_risk: { icon:'🩺', name:'Health risk assessment' },
   check_scheme_eligibility: { icon:'✅', name:'Check scheme eligibility' },
   mental_wellbeing_check:   { icon:'🧠', name:'Mental wellbeing check' },
+  tavily_web_search:  { icon:'🔍', name:'Search the web' },
+  tavily_search_health:  { icon:'🔍', name:'Search health information' },
+  tavily_search_finance: { icon:'🔍', name:'Search financial information' },
+  tavily_search_career:  { icon:'🔍', name:'Search career information' },
 };
 
 function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
@@ -717,6 +721,31 @@ function ToolResultBlock({ tool, result }) {
               <div className="text-xs mt-1"><strong>Eligibility:</strong> {scheme.eligibility}</div>
               <div className="text-xs mt-1"><strong>Benefit:</strong> {scheme.benefit}</div>
               <div className="text-xs mt-1"><strong>How to apply:</strong> {scheme.how_to_apply}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Tavily web search results
+  if (result && typeof result === 'object' && result.success && result.results && result.source === 'tavily') {
+    return (
+      <div className="rounded-lg p-3 mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+        <div className="font-semibold text-sm mb-2" style={{color:'var(--kalpana-rose-700)'}}>{meta.icon} Web search results</div>
+        {result.answer && (
+          <div className="rounded-lg p-3 mb-2 text-sm" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
+            <div className="font-medium mb-1" style={{color:'var(--kalpana-text)'}}>Quick answer:</div>
+            <div style={{color:'var(--kalpana-text-soft)'}}>{result.answer}</div>
+          </div>
+        )}
+        <div className="space-y-2">
+          {result.results.slice(0, 5).map((r, i) => (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
+              <a href={r.url} target="_blank" rel="noopener" className="font-medium hover:underline" style={{color:'var(--kalpana-rose-700)'}}>
+                {r.title}
+              </a>
+              <div className="text-xs mt-1 line-clamp-2" style={{color:'var(--kalpana-text-soft)'}}>{r.snippet}</div>
             </div>
           ))}
         </div>
