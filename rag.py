@@ -32,6 +32,10 @@ _vectors_loaded = False
 _firestore_client = None
 _firestore_available = False
 
+# ── Vertex AI Availability ──
+_vertex_available = True
+
+
 
 def _get_firestore():
     global _firestore_client, _firestore_available
@@ -54,28 +58,32 @@ def _get_firestore():
 
 async def get_embedding(text: str) -> list[float]:
     """Generate embedding via Vertex AI or deterministic 768-dim mock."""
+    global _vertex_available
     if not text or not text.strip():
         text = "empty"
     
-    try:
-        from vertexai.language_models import TextEmbeddingModel
-        model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
-        result = model.get_embeddings([text])
-        return result[0].values
-    except Exception as e:
-        logger.warning(f"Vertex embedding failed, using mock: {e}")
-        embedding = []
-        seed = text.lower().strip()
-        while len(embedding) < 768:
-            seed_hash = hashlib.sha256(seed.encode()).hexdigest()
-            for i in range(0, len(seed_hash) - 1, 2):
-                if len(embedding) >= 768:
-                    break
-                hex_pair = seed_hash[i:i+2]
-                if len(hex_pair) == 2:
-                    embedding.append(int(hex_pair, 16) / 255.0)
-            seed = seed_hash
-        return embedding[:768]
+    if _vertex_available:
+        try:
+            from vertexai.language_models import TextEmbeddingModel
+            model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
+            result = model.get_embeddings([text])
+            return result[0].values
+        except Exception as e:
+            logger.warning(f"Vertex embedding failed, using mock: {e}")
+            _vertex_available = False
+            
+    embedding = []
+    seed = text.lower().strip()
+    while len(embedding) < 768:
+        seed_hash = hashlib.sha256(seed.encode()).hexdigest()
+        for i in range(0, len(seed_hash) - 1, 2):
+            if len(embedding) >= 768:
+                break
+            hex_pair = seed_hash[i:i+2]
+            if len(hex_pair) == 2:
+                embedding.append(int(hex_pair, 16) / 255.0)
+        seed = seed_hash
+    return embedding[:768]
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""

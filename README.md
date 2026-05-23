@@ -11,9 +11,10 @@ ShaktiAgent is a multi-agent AI system that serves as a life-stage companion for
 
 ```
 User → FastAPI → Orchestrator (classify → route → validate)
-                      ├── Health Agent (MedGemma / gemini-2.0-flash)
-                      ├── Finance Agent (gemini-2.0-flash)
-                      └── Career Agent (gemini-2.0-flash)
+                      ├── Health Agent (MedGemma / gemini-2.5-flash)
+                      ├── Finance Agent (gemini-2.5-flash)
+                      └── Career Agent (gemini-2.5-flash)
+
                             ↕
                     RAG Pipeline (Firestore vectors)
                     Memory Layer (3-tier: short/episodic/semantic)

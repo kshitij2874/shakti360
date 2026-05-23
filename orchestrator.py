@@ -69,7 +69,7 @@ async def classify_intent(query: str) -> str:
                   "scss", "nps", "interest rate", "return"]
     career_kw = ["job", "career", "scholarship", "course", "study", "college", "intern",
                  "resume", "interview", "skill", "returnship", "mentor", "business",
-                 "entrepreneur", "startup", "freelance", "training"]
+                 "entrepreneur", "startup", "freelance", "training", "work", "back to work", "working", "employment"]
 
     scores = {
         "HEALTH": sum(1 for kw in health_kw if kw in q),
