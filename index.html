@@ -826,14 +826,6 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} slide-up`}>
       <div className={isUser ? 'kalpana-bubble-user' : 'kalpana-bubble-bot'}>
-        {!isUser && isClarifying && (
-          <div className="kalpana-badge kalpana-badge-health mb-2" style={{background:'rgba(196, 181, 253, 0.18)', color:'#6d4ed4'}}>
-            🌸 Getting to know your situation
-            {typeof msg.question_index === 'number' && typeof msg.questions_total === 'number' && (
-              <span className="ml-1 opacity-70">· {msg.question_index + 1}/{msg.questions_total}</span>
-            )}
-          </div>
-        )}
         {isAnswer && msg.pillar && (
           <div className={`kalpana-badge ${pillar.badge} mb-2`}>
             {pillar.icon} {pillar.label || msg.pillar}

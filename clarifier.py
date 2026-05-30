@@ -143,6 +143,65 @@ def build_clarification_context(
     return "\n".join(lines)
 
 
+async def generate_contextual_questions(
+    pillar: str,
+    age_band: str,
+    query: str,
+    profile: Optional[dict] = None,
+) -> list[str]:
+    """
+    Use the LLM to generate 1 precise clarifying question based on what the user actually said.
+    Acknowledges their specific situation — feels like a friend asking, not a bot checklist.
+    Falls back to a single filtered template on failure.
+    """
+    profile_hint = ""
+    if profile:
+        bits = []
+        if profile.get("preferred_name"):
+            bits.append(f"User's name: {profile['preferred_name']}")
+        if profile.get("subject_role"):
+            bits.append(f"Life stage: {profile['subject_role']}")
+        if bits:
+            profile_hint = "\n".join(bits) + "\n"
+
+    prompt = (
+        "You are Kalpana, a warm and direct women's life companion.\n"
+        f"A user just wrote: \"{query}\"\n\n"
+        f"Topic: {pillar} | Age group: {age_band}\n"
+        f"{profile_hint}\n"
+        "What is the ONE most important thing still missing from their message that would "
+        "genuinely change your advice?\n\n"
+        "Rules:\n"
+        "- Write exactly 1 question (2 only if a second is truly critical)\n"
+        "- Do NOT ask about anything the user already mentioned\n"
+        "- Acknowledge something specific from their message — show you read it\n"
+        "- Sound like a caring, direct friend — not a medical form or checklist\n"
+        "- Keep it under 25 words\n"
+        "- If the user gave enough context to answer fully, output: SKIP\n\n"
+        "Output only the question(s), one per line. No preamble, no numbering."
+    )
+
+    try:
+        raw = await _call_gemini(prompt, max_tokens=80, temperature=0.4)
+        raw = (raw or "").strip()
+
+        if not raw or raw.upper().startswith("SKIP"):
+            return []
+
+        questions = [
+            q.strip().lstrip("1234567890.-) ").strip()
+            for q in raw.split("\n")
+            if q.strip() and len(q.strip()) > 8
+        ]
+        valid = [q for q in questions if q and not q.upper().startswith("SKIP")]
+        return valid[:2]
+
+    except Exception as e:
+        logger.warning(f"Contextual question generation failed: {e}")
+        templates = get_clarifying_questions(pillar, age_band, query)
+        return templates[:1]
+
+
 async def _call_gemini(prompt: str, max_tokens: int = 120, temperature: float = 0.2) -> str:
     """Delegate to the unified LLM client (DeepSeek → Gemini fallback)."""
     try:

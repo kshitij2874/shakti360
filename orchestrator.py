@@ -16,12 +16,10 @@ from validators import run_all_validations, SAFE_FALLBACK
 from memory import get_user_memory_context, ShortTermMemory
 from cache import get_cached_response, set_cached_response
 from clarifier import (
-    get_clarifying_questions,
     is_yes_no,
     is_doc_request,
     build_clarification_context,
-    opening_kalpana_line,
-    filter_already_answered,
+    generate_contextual_questions,
 )
 from dual_user import get_user_profile
 import agents.health as health_agent
@@ -207,14 +205,11 @@ async def process_query(
     if not phase:
         # Classify the intent up front so we can ask pillar-tuned questions
         intent = await classify_intent(query)
-        template_qs = get_clarifying_questions(intent, age_band, query)
-
-        # Fetch profile once for filtering + framing
+        # Fetch profile for framing
         profile = await get_user_profile(user_id) if user_id else {}
 
-        # Smart filter — drop questions the user already answered in their
-        # original message or that the profile implies
-        clarifying_qs = await filter_already_answered(template_qs, query, profile)
+        # Generate 1-2 contextual questions using LLM — adapts to what the user actually said
+        clarifying_qs = await generate_contextual_questions(intent, age_band, query, profile)
 
         # If filter returned 0 questions OR no template available, skip straight to answering
         if not clarifying_qs:
@@ -235,10 +230,7 @@ async def process_query(
                 start_time=start_time,
             )
 
-        name = profile.get("preferred_name") or ""
-        opener = opening_kalpana_line(intent, name=name)
-
-        # Store state and return the first clarifying question
+        # Store state and return the first clarifying question — no canned opener
         _set_session_state(session_id, {
             "phase": "clarifying",
             "pillar": intent,
@@ -253,8 +245,7 @@ async def process_query(
 
         return {
             "type": "clarifying_question",
-            "response": f"{opener}\n\n{first_q}",
-            "kalpana_says": opener,
+            "response": first_q,
             "question": first_q,
             "is_yes_no": is_yes_no(first_q),
             "is_doc_request": is_doc_request(first_q),
