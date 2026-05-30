@@ -29,21 +29,12 @@ import agents.career as career_agent
 logger = logging.getLogger("shakti.orchestrator")
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-# ── Conversation state (in-memory) ──
-# Keyed by session_id. Holds clarifying phase between turns.
-_conversation_state: dict[str, dict[str, Any]] = {}
-
-
-def _get_session_state(session_id: str) -> dict[str, Any]:
-    return _conversation_state.get(session_id, {})
-
-
-def _set_session_state(session_id: str, state: dict[str, Any]) -> None:
-    _conversation_state[session_id] = state
-
-
-def _clear_session_state(session_id: str) -> None:
-    _conversation_state.pop(session_id, None)
+# ── Conversation state (Firestore-backed, survives across Cloud Run instances) ──
+from session_store import (
+    get_session_state as _get_session_state,
+    set_session_state as _set_session_state,
+    clear_session_state as _clear_session_state,
+)
 
 
 # How many recent answers count as the "same conversation" before we reset
@@ -222,7 +213,7 @@ async def process_query(
     except Exception as e:
         logger.warning(f"Crisis detection skipped: {e}")
 
-    state = _get_session_state(session_id)
+    state = await _get_session_state(session_id)
     phase = state.get("phase")
 
     # ── STATE: NEW CONVERSATION ──
@@ -238,7 +229,7 @@ async def process_query(
         # If filter returned 0 questions OR no template available, skip straight to answering
         if not clarifying_qs:
             logger.info(f"Skipping clarifying — user query already covers all questions: '{query[:80]}'")
-            _set_session_state(session_id, {
+            await _set_session_state(session_id, {
                 "phase": "answering_inline",
                 "pillar": intent,
                 "original_query": query,
@@ -255,7 +246,7 @@ async def process_query(
             )
 
         # Store state and return the first clarifying question — no canned opener
-        _set_session_state(session_id, {
+        await _set_session_state(session_id, {
             "phase": "clarifying",
             "pillar": intent,
             "original_query": query,
@@ -307,7 +298,7 @@ async def process_query(
         if new_idx < len(clarifying_qs):
             # Ask the next one
             next_q = clarifying_qs[new_idx]
-            _set_session_state(session_id, {
+            await _set_session_state(session_id, {
                 **state,
                 "qa_pairs": qa_pairs,
                 "asked_index": new_idx,
@@ -334,7 +325,7 @@ async def process_query(
             }
 
         # All clarifying questions answered — synthesize the real answer
-        _set_session_state(session_id, {
+        await _set_session_state(session_id, {
             **state,
             "qa_pairs": qa_pairs,
             "phase": "answering",
@@ -382,7 +373,7 @@ async def process_query(
             "a": query,
         })
 
-        _set_session_state(session_id, {
+        await _set_session_state(session_id, {
             **state,
             "phase": "answering",
             "pillar": new_intent,  # Use the NEW intent, not the old one
@@ -400,7 +391,7 @@ async def process_query(
 
     # New topic — reset and re-clarify
     logger.info(f"New topic detected, resetting clarifying flow: '{query[:60]}'")
-    _clear_session_state(session_id)
+    await _clear_session_state(session_id)
     return await process_query(user_id=user_id, age_band=age_band, query=query, session_id=session_id)
 
 
@@ -493,8 +484,8 @@ async def _generate_full_answer(
     if cached:
         latency_ms = (time.time() - start_time) * 1000
         metrics.record_session(latency_ms, intent, age_band, cost=0.0)
-        prior_state = _get_session_state(session_id)
-        _set_session_state(session_id, {
+        prior_state = await _get_session_state(session_id)
+        await _set_session_state(session_id, {
             **prior_state,
             "phase": "done",
             "last_pillar": intent,
@@ -605,8 +596,8 @@ async def _generate_full_answer(
 
     # Mark conversation as done and remember the answered topic so a follow-up
     # user message can be detected and routed without re-clarifying.
-    prior_state = _get_session_state(session_id)
-    _set_session_state(session_id, {
+    prior_state = await _get_session_state(session_id)
+    await _set_session_state(session_id, {
         **prior_state,
         "phase": "done",
         "last_pillar": intent,

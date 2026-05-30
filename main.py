@@ -47,8 +47,8 @@ from onboarding import (
 from greeting import generate_greeting
 
 
-# ── Pending tool calls store (for human oversight gate) ──
-_pending_approvals: dict[str, dict[str, Any]] = {}
+# ── Pending tool calls store (Firestore-backed for human oversight gate) ──
+from session_store import set_pending_approval, pop_pending_approval
 
 
 async def _extract_and_save_life_context(
@@ -133,13 +133,42 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Restrict origins via ALLOWED_ORIGINS env (comma-separated). Default "*".
+# Auth is via Authorization header (not cookies), so credentials aren't needed —
+# keeping allow_credentials False lets a wildcard origin stay valid + safe.
+_allowed = os.getenv("ALLOWED_ORIGINS", "*").strip()
+_origins = ["*"] if _allowed == "*" else [o.strip() for o in _allowed.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# ── Lightweight per-IP rate limiter (per-instance; basic abuse protection) ──
+import collections
+_RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
+_rate_buckets: dict[str, collections.deque] = collections.defaultdict(collections.deque)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    # Only throttle the expensive write endpoints; let GETs and static through.
+    if request.method == "POST" and request.url.path not in ("/health",):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        bucket = _rate_buckets[client_ip]
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= _RATE_LIMIT:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please slow down a moment."},
+            )
+        bucket.append(now)
+    return await call_next(request)
 
 
 # ═══════════════════════════════════════════════════════
@@ -190,11 +219,11 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
         # Store pending tool calls for human oversight gate
         tools_to_call = result.get("tools_to_call", [])
         if tools_to_call:
-            _pending_approvals[session_id] = {
+            await set_pending_approval(session_id, {
                 "tools": tools_to_call,
                 "user_id": request.user_id,
                 "timestamp": time.time(),
-            }
+            })
 
         # Store session history (in-memory)
         if request.user_id not in _session_history:
@@ -273,7 +302,7 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
 @app.post("/approve")
 async def approve(request: ApproveRequest, user: dict = Depends(verify_token)):
     """Approve and fire queued tool calls for a session."""
-    pending = _pending_approvals.pop(request.session_id, None)
+    pending = await pop_pending_approval(request.session_id)
     if not pending:
         raise HTTPException(status_code=404, detail="No pending tools for this session.")
 
@@ -299,7 +328,7 @@ async def approve(request: ApproveRequest, user: dict = Depends(verify_token)):
 @app.post("/reject")
 async def reject(request: RejectRequest, user: dict = Depends(verify_token)):
     """Reject queued tool calls. Logs the rejection."""
-    pending = _pending_approvals.pop(request.session_id, None)
+    pending = await pop_pending_approval(request.session_id)
     if not pending:
         raise HTTPException(status_code=404, detail="No pending tools for this session.")
 
@@ -523,7 +552,7 @@ async def upload_attachment(
         from orchestrator import (
             _get_session_state, _set_session_state, _generate_full_answer
         )
-        state = _get_session_state(session_id)
+        state = await _get_session_state(session_id)
         if state and state.get("phase") == "clarifying":
             qs = state.get("clarifying_questions", [])
             idx = state.get("asked_index", 0)
@@ -538,7 +567,7 @@ async def upload_attachment(
             if new_idx < len(qs):
                 # More clarifying questions remain
                 next_q = qs[new_idx]
-                _set_session_state(session_id, {
+                await _set_session_state(session_id, {
                     **state, "qa_pairs": qa_pairs, "asked_index": new_idx,
                 })
                 from clarifier import is_yes_no as _iyn, is_doc_request as _idr
@@ -555,7 +584,7 @@ async def upload_attachment(
                 }
             else:
                 # All clarifying questions answered — generate the real answer now
-                _set_session_state(session_id, {
+                await _set_session_state(session_id, {
                     **state, "qa_pairs": qa_pairs, "phase": "answering",
                 })
                 advance_result = await _generate_full_answer(
@@ -612,7 +641,7 @@ async def session_reset(req: SessionResetRequest, user: dict = Depends(verify_to
     carry over follow-up context from the previous conversation.
     """
     from orchestrator import _clear_session_state
-    _clear_session_state(req.session_id)
+    await _clear_session_state(req.session_id)
     logger.info(f"Session state cleared for {req.session_id}")
     return JSONResponse(content={"ok": True, "session_id": req.session_id})
 
