@@ -159,6 +159,7 @@ async def _generate_answer_text(
                 temperature=0.7,
                 top_p=0.9,
                 model_name=model_name,
+                tier="reasoning",  # main answer = difficult task → stronger model
             )
             text = (text or "").strip()
 
@@ -562,6 +563,7 @@ async def _call_gemini(
     temperature: float,
     top_p: float,
     model_name: Optional[str] = None,
+    tier: str = "fast",
 ) -> str:
     """Delegate to the unified LLM client (DeepSeek → Gemini fallback)."""
     from llm import call_llm
@@ -571,6 +573,7 @@ async def _call_gemini(
         temperature=temperature,
         top_p=top_p,
         model_name=model_name,
+        tier=tier,
     )
 
 

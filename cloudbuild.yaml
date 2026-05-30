@@ -31,7 +31,7 @@ steps:
       - '--max-instances=3'
       - '--service-account=shakti-agent-sa@$PROJECT_ID.iam.gserviceaccount.com'
       - '--update-secrets=MAPS_API_KEY=MAPS_API_KEY:latest,LANGFUSE_PUBLIC_KEY=LANGFUSE_PUBLIC_KEY:latest,LANGFUSE_SECRET_KEY=LANGFUSE_SECRET_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,DEEPSEEK_API_KEY=DEEPSEEK_API_KEY:latest'
-      - '--set-env-vars=PROJECT_ID=$PROJECT_ID,LOCATION=asia-south1,VERTEX_LOCATION=us-central1,GEMINI_MODEL=gemini-2.5-flash,DEEPSEEK_MODEL=deepseek-chat,LANGFUSE_BASE_URL=https://cloud.langfuse.com,RAG_BUCKET=shakti360-rag,USE_MEDGEMMA=false,ALLOWED_ORIGINS=https://shakti-agent-865544319222.asia-south1.run.app,RATE_LIMIT_PER_MIN=60'
+      - '--set-env-vars=PROJECT_ID=$PROJECT_ID,LOCATION=asia-south1,VERTEX_LOCATION=us-central1,GEMINI_MODEL=gemini-2.5-flash,DEEPSEEK_MODEL_FAST=deepseek-v4-flash,DEEPSEEK_MODEL_REASONING=deepseek-v4-pro,DEEPSEEK_REASONING_EFFORT=high,LANGFUSE_BASE_URL=https://cloud.langfuse.com,RAG_BUCKET=shakti360-rag,USE_MEDGEMMA=false,ALLOWED_ORIGINS=https://shakti-agent-865544319222.asia-south1.run.app,RATE_LIMIT_PER_MIN=60'
 
 images:
   - 'asia-south1-docker.pkg.dev/$PROJECT_ID/shakti-repo/shakti-agent:$SHORT_SHA'

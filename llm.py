@@ -1,10 +1,28 @@
 """
-llm.py — Unified LLM client for ShaktiAgent.
-Primary: DeepSeek (deepseek-chat via OpenAI-compatible API).
-Fallback: Google Gemini via Vertex AI.
+llm.py — Unified, tiered LLM client for ShaktiAgent.
 
-Set DEEPSEEK_API_KEY to enable DeepSeek. If missing or if DeepSeek
-errors, every call falls back to GEMINI_MODEL automatically.
+Two tiers:
+  - "fast"      → DeepSeek V4 Flash in NON-thinking mode for routing,
+                  classification, clarifying questions, follow-up detection,
+                  next-steps, memory, greeting. Quick + economical.
+  - "reasoning" → DeepSeek V4 Pro in THINKING mode for the main answer and
+                  difficult situations. Highest quality.
+
+Primary provider is DeepSeek; falls back to Google Gemini (Vertex AI) if the
+DeepSeek key is missing or a call fails.
+
+Model IDs are env-configurable:
+  DEEPSEEK_MODEL_FAST       (default "deepseek-v4-flash")
+  DEEPSEEK_MODEL_REASONING  (default "deepseek-v4-pro")
+Gemini fallback tiers:
+  GEMINI_MODEL              (default "gemini-2.5-flash")
+  GEMINI_MODEL_REASONING    (default = GEMINI_MODEL)
+
+DeepSeek V4 notes (https://api-docs.deepseek.com/guides/thinking_mode):
+  - Thinking mode toggled via extra_body={"thinking": {"type": ...}}.
+  - Thinking mode ignores temperature/top_p and returns chain-of-thought in
+    reasoning_content; the final answer is still in message.content.
+  - Legacy deepseek-chat / deepseek-reasoner deprecate 2026/07/24.
 """
 from __future__ import annotations
 
@@ -16,8 +34,25 @@ from typing import Optional
 logger = logging.getLogger("shakti.llm")
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+# Backwards-compatible single var still respected as the fast default.
+_DEEPSEEK_DEFAULT = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL_FAST = os.getenv("DEEPSEEK_MODEL_FAST", _DEEPSEEK_DEFAULT)
+DEEPSEEK_MODEL_REASONING = os.getenv("DEEPSEEK_MODEL_REASONING", "deepseek-v4-pro")
+
+# reasoning_effort sent when thinking is enabled ("high" | "max")
+DEEPSEEK_REASONING_EFFORT = os.getenv("DEEPSEEK_REASONING_EFFORT", "high")
+
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL_REASONING = os.getenv("GEMINI_MODEL_REASONING", GEMINI_MODEL)
+
+
+def _deepseek_model_for(tier: str) -> str:
+    return DEEPSEEK_MODEL_REASONING if tier == "reasoning" else DEEPSEEK_MODEL_FAST
+
+
+def _gemini_model_for(tier: str) -> str:
+    return GEMINI_MODEL_REASONING if tier == "reasoning" else GEMINI_MODEL
 
 
 async def call_llm(
@@ -25,18 +60,20 @@ async def call_llm(
     max_tokens: int = 1200,
     temperature: float = 0.7,
     top_p: float = 0.9,
-    model_name: Optional[str] = None,  # Gemini model override used only in fallback
+    model_name: Optional[str] = None,  # explicit Gemini override (fallback only)
+    tier: str = "fast",                # "fast" | "reasoning"
 ) -> str:
     """
-    Primary: DeepSeek. Falls back to Gemini if key is absent or call fails.
+    Route to the tier's model. Primary DeepSeek, Gemini fallback on missing key/error.
     """
     if os.getenv("DEEPSEEK_API_KEY", ""):
         try:
-            return await _call_deepseek(prompt, max_tokens, temperature, top_p)
+            return await _call_deepseek(prompt, max_tokens, temperature, top_p, tier)
         except Exception as e:
-            logger.warning(f"DeepSeek call failed ({e}) — falling back to Gemini")
+            logger.warning(f"DeepSeek ({tier}) call failed ({e}) — falling back to Gemini")
 
-    return await _call_gemini(prompt, max_tokens, temperature, top_p, model_name)
+    gemini_name = model_name or _gemini_model_for(tier)
+    return await _call_gemini(prompt, max_tokens, temperature, top_p, gemini_name)
 
 
 # ── DeepSeek ──────────────────────────────────────────────────────────────────
@@ -46,23 +83,41 @@ async def _call_deepseek(
     max_tokens: int,
     temperature: float,
     top_p: float,
+    tier: str = "fast",
 ) -> str:
     try:
         from openai import AsyncOpenAI  # type: ignore
     except ImportError:
         raise RuntimeError("openai package not installed — run: pip install openai")
 
+    model = _deepseek_model_for(tier)
+    thinking = (tier == "reasoning")
+
     client = AsyncOpenAI(
         api_key=os.getenv("DEEPSEEK_API_KEY"),
         base_url=DEEPSEEK_BASE_URL,
     )
-    response = await client.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-    )
+
+    kwargs: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+
+    if thinking:
+        # Thinking mode: no sampling params; effort + thinking flag via extra_body.
+        kwargs["extra_body"] = {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": DEEPSEEK_REASONING_EFFORT,
+        }
+    else:
+        # Non-thinking mode: fast, supports sampling params.
+        kwargs["temperature"] = temperature
+        kwargs["top_p"] = top_p
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    response = await client.chat.completions.create(**kwargs)
+    # Final answer is always in content (reasoning_content holds the CoT, ignored here).
     return (response.choices[0].message.content or "").strip()
 
 
