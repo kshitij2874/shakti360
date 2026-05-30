@@ -204,7 +204,7 @@ async def process_query(
     phase = state.get("phase")
 
     # ── STATE: NEW CONVERSATION ──
-    if not phase or phase == "done":
+    if not phase:
         # Classify the intent up front so we can ask pillar-tuned questions
         intent = await classify_intent(query)
         template_qs = get_clarifying_questions(intent, age_band, query)
