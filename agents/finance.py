@@ -124,8 +124,6 @@ async def run(
             "params": {"query": query, "max_results": 5},
             "reason": "User explicitly asks for up-to-date financial information.",
         })
-            "reason": "Query needs up-to-date financial information that may not be in RAG.",
-        })
 
     # 5. Legacy citation strings (for validators)
     citations = []
