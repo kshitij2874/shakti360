@@ -480,19 +480,19 @@ function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
 }
 
 // ─── Tool Result Card — pretty render of approved tool results ───
-function ToolResultCard({ results }) {
+function ToolResultCard({ results, onRetry }) {
   if (!results || results.length === 0) return null;
   return (
     <div className="rounded-xl p-4 my-2 slide-up" style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)'}}>
       <div className="text-xs font-medium mb-3 font-heading" style={{color:'var(--kalpana-rose-700)'}}>✓ Here's what I found</div>
       {results.map((r, i) => (
-        <ToolResultBlock key={i} tool={r.tool} result={r.result} />
+        <ToolResultBlock key={i} tool={r.tool} result={r.result} onRetry={onRetry} />
       ))}
     </div>
   );
 }
 
-function ToolResultBlock({ tool, result }) {
+function ToolResultBlock({ tool, result, onRetry }) {
   const meta = TOOL_LABELS[tool] || { icon:'✨', name: (tool||'').replace(/_/g,' ') };
 
   // List of places (clinics / police)
@@ -756,8 +756,15 @@ function ToolResultBlock({ tool, result }) {
   // Error
   if (result && typeof result === 'object' && result.error) {
     return (
-      <div className="rounded-lg p-3 text-sm mb-2" style={{background:'white', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text-soft)'}}>
-        I couldn't complete that just now — try again in a moment.
+      <div className="rounded-lg p-3 text-sm mb-2 flex items-center justify-between gap-3" style={{background:'white', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text-soft)'}}>
+        <span>I couldn't complete that just now.</span>
+        {onRetry && (
+          <button onClick={onRetry}
+            className="text-xs px-3 py-1.5 rounded-lg font-medium transition hover:opacity-80 flex-shrink-0"
+            style={{background:'var(--kalpana-rose-500)', color:'white'}}>
+            Try again →
+          </button>
+        )}
       </div>
     );
   }
@@ -782,10 +789,11 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
 
   // Tool result renders as a standalone card (no bubble wrapper)
   if (isToolResult) {
+    const retryFn = msg.retry_step && onPickNextStep ? () => onPickNextStep(msg.retry_step) : null;
     return (
       <div className="flex justify-start slide-up">
         <div className="max-w-[90%]">
-          <ToolResultCard results={msg.tool_results}/>
+          <ToolResultCard results={msg.tool_results} onRetry={retryFn}/>
         </div>
       </div>
     );
@@ -1258,12 +1266,16 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           type: 'tool_result',
           content: '',
           tool_results: [{ tool: step.tool_or_context, result: data }],
+          retry_step: step,
         }]);
       } catch (e) {
         console.error('Tool execution failed:', e);
         setMessages(prev => [...prev, {
-          role:'assistant', type:'system_note',
-          content:"I couldn't run that just now. Want to try again?"
+          role: 'assistant',
+          type: 'tool_result',
+          content: '',
+          tool_results: [{ tool: step.tool_or_context, result: { error: e.message || 'Request failed' } }],
+          retry_step: step,
         }]);
       }
       setThinkingSteps([]);

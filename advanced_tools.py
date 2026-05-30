@@ -256,10 +256,11 @@ def _generate_mock_jobs(query: str, location: str, count: int) -> list[dict]:
 # ═══════════════════════════════════════════════════════════
 
 async def analyze_budget(
-    monthly_income: float,
-    expenses: dict[str, float],
+    monthly_income: float = 50000,
+    expenses: Optional[dict] = None,
     savings_goal: Optional[float] = None,
 ) -> dict[str, Any]:
+    expenses = expenses or {}
     """Analyze budget and provide recommendations.
     
     Args:
@@ -383,12 +384,15 @@ def _calculate_budget_health_score(savings_rate: float, essential_ratio: float, 
 # ═══════════════════════════════════════════════════════════
 
 async def assess_health_risk(
-    age: int,
-    gender: str,
-    symptoms: list[str],
-    conditions: list[str],
-    lifestyle: dict[str, Any],
+    age: int = 30,
+    gender: str = "female",
+    symptoms: Optional[list] = None,
+    conditions: Optional[list] = None,
+    lifestyle: Optional[dict] = None,
 ) -> dict[str, Any]:
+    symptoms = symptoms or []
+    conditions = conditions or []
+    lifestyle = lifestyle or {}
     """Provide a preliminary health risk assessment.
     
     Args:
@@ -515,9 +519,10 @@ async def assess_health_risk(
 # ═══════════════════════════════════════════════════════════
 
 async def check_scheme_eligibility(
-    user_profile: dict[str, Any],
+    user_profile: Optional[dict] = None,
     scheme_type: str = "all",
 ) -> dict[str, Any]:
+    user_profile = user_profile or {}
     """Check which government schemes the user is eligible for.
     
     Args:
@@ -637,12 +642,13 @@ async def check_scheme_eligibility(
 # ═══════════════════════════════════════════════════════════
 
 async def mental_wellbeing_check(
-    mood: str,
-    stress_level: str,
-    sleep_quality: str,
-    social_support: str,
-    recent_changes: list[str],
+    mood: str = "neutral",
+    stress_level: str = "moderate",
+    sleep_quality: str = "fair",
+    social_support: str = "moderate",
+    recent_changes: Optional[list] = None,
 ) -> dict[str, Any]:
+    recent_changes = recent_changes or []
     """Provide a mental wellbeing assessment and coping strategies.
     
     Args:
