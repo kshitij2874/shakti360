@@ -301,7 +301,9 @@ def _extract_citations(rag_chunks: list[dict]) -> list[dict]:
 
     for chunk in rag_chunks[:8]:
         source = chunk.get("source", "")
-        label = _label_from_source(source)
+        is_web = bool(chunk.get("is_web"))
+        label = (chunk.get("doc_title") or source) if is_web else _label_from_source(source)
+        label = (label or "Source")[:40]
         if label in seen:
             continue
         seen.add(label)
@@ -310,6 +312,7 @@ def _extract_citations(rag_chunks: list[dict]) -> list[dict]:
             "label": label,
             "source": chunk.get("source_ref") or source,
             "section": (chunk.get("section_title") or "")[:80],
+            "kind": "web" if is_web else "official",
         })
         if len(citations) >= 5:
             break

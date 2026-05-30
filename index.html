@@ -381,19 +381,31 @@ function CitationChips({ chips, citations }) {
     items = chips.map(c => ({
       label: (c.label || '').toString().substring(0, 30),
       title: c.source || c.section || '',
+      kind: c.kind || 'official',
     }));
   } else if (Array.isArray(citations) && citations.length > 0) {
     items = citations.map(c => {
       const label = (c || '').replace(/\[Source:\s*/i, '').replace(/\]$/, '').split(',')[0].trim().substring(0, 30);
-      return { label, title: c };
+      return { label, title: c, kind: 'official' };
     });
   }
   if (items.length === 0) return null;
+  const isWeb = items.some(it => it.kind === 'web');
   return (
-    <div className="flex flex-wrap gap-1.5 mt-3">
-      {items.map((it, i) => (
-        <span key={i} className="kalpana-source-chip" title={it.title}>{it.label}</span>
-      ))}
+    <div className="mt-3">
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((it, i) => (
+          <span key={i} className="kalpana-source-chip" title={it.title}
+            style={it.kind === 'web' ? {borderStyle:'dashed'} : undefined}>
+            {it.kind === 'web' ? '🌐 ' : '✓ '}{it.label}
+          </span>
+        ))}
+      </div>
+      <div className="text-[10px] mt-1.5" style={{color:'var(--kalpana-text-soft)'}}>
+        {isWeb
+          ? '🌐 From a live web search — please verify before acting on it.'
+          : '✓ From verified government & trusted sources.'}
+      </div>
     </div>
   );
 }

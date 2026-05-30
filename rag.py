@@ -376,6 +376,69 @@ async def retrieve(
     return truncated
 
 
+async def web_search_fallback(query: str, pillar: str) -> list[dict[str, Any]]:
+    """When the local RAG corpus has nothing, search the web (Tavily) and return
+    results shaped like RAG chunks so the rest of the pipeline is unchanged.
+    Clearly marked as web sources (not official docs) for transparency.
+    Returns [] if web search is unavailable."""
+    try:
+        from advanced_tools import (
+            tavily_search_health, tavily_search_finance, tavily_search_career,
+        )
+        fn = {
+            "HEALTH": tavily_search_health,
+            "FINANCE": tavily_search_finance,
+            "CAREER": tavily_search_career,
+        }.get(pillar.upper())
+        if not fn:
+            return []
+
+        result = await fn(query=query, max_results=4)
+        if not result.get("success"):
+            return []
+
+        chunks: list[dict[str, Any]] = []
+
+        # Tavily's synthesized answer makes a strong first chunk
+        answer = (result.get("answer") or "").strip()
+        if answer:
+            chunks.append({
+                "id": "web_answer",
+                "content": answer,
+                "pillar": pillar.upper(),
+                "age_band": "",
+                "source": "web_search",
+                "source_ref": "[Web search — verify before acting]",
+                "doc_title": "Web search",
+                "section_title": "Summary",
+                "is_web": True,
+            })
+
+        for i, r in enumerate(result.get("results", [])[:4]):
+            snippet = (r.get("snippet") or "").strip()
+            if not snippet:
+                continue
+            url = r.get("url", "")
+            domain = url.split("/")[2] if "://" in url else url
+            chunks.append({
+                "id": f"web_{i}",
+                "content": snippet,
+                "pillar": pillar.upper(),
+                "age_band": "",
+                "source": domain or "web",
+                "source_ref": f"[Web: {url}]",
+                "doc_title": r.get("title", "Web result"),
+                "section_title": r.get("title", "")[:80],
+                "is_web": True,
+            })
+
+        logger.info(f"Web fallback returned {len(chunks)} chunks for pillar={pillar}")
+        return chunks
+    except Exception as e:
+        logger.warning(f"Web search fallback failed: {e}")
+        return []
+
+
 def format_context(chunks: list[dict[str, Any]]) -> str:
     """Format retrieved chunks into a context string for the LLM."""
     if not chunks:
