@@ -463,6 +463,7 @@ const TOOL_LABELS = {
   tavily_search_health:  { icon:'🔍', name:'Search health information' },
   tavily_search_finance: { icon:'🔍', name:'Search financial information' },
   tavily_search_career:  { icon:'🔍', name:'Search career information' },
+  find_support_org:   { icon:'🤝', name:'Connect with real support' },
 };
 
 function ApprovalCard({ tools, sessionId, onApprove, onReject }) {
@@ -521,6 +522,29 @@ function ToolResultBlock({ tool, result, onRetry }) {
                 {p.rating && p.rating !== 'N/A' && <span>★ {p.rating}</span>}
                 {p.phone && <span>📞 {p.phone}</span>}
                 {p.open_now === true && <span style={{color:'#4a7a3f'}}>Open now</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Warm human handoff — support organisations
+  if (result && typeof result === 'object' && Array.isArray(result.organisations)) {
+    return (
+      <div className="mb-2">
+        {result.intro && <div className="text-sm mb-2" style={{color:'var(--kalpana-text)'}}>{result.intro}</div>}
+        <div className="space-y-2">
+          {result.organisations.map((o, i) => (
+            <div key={i} className="rounded-lg p-3 text-sm" style={{background:'white', border:'1px solid var(--kalpana-rose-100)'}}>
+              <div className="font-medium" style={{color:'var(--kalpana-rose-700)'}}>{o.name}</div>
+              {o.helps_with && <div className="text-xs mt-0.5" style={{color:'var(--kalpana-text-soft)'}}>{o.helps_with}</div>}
+              <div className="flex gap-3 mt-1 text-xs flex-wrap">
+                {o.phone && <a href={`tel:${(o.phone||'').replace(/[^0-9+]/g,'')}`} style={{color:'#b8772b'}}>📞 {o.phone}</a>}
+                {o.contact && (/\./.test(o.contact)
+                  ? <a href={`https://${o.contact.replace(/^https?:\/\//,'')}`} target="_blank" rel="noopener" style={{color:'var(--kalpana-rose-500)'}}>🔗 {o.contact}</a>
+                  : <span style={{color:'var(--kalpana-text-soft)'}}>{o.contact}</span>)}
               </div>
             </div>
           ))}

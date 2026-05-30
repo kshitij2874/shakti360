@@ -752,6 +752,62 @@ async def mental_wellbeing_check(
 
 
 # ═══════════════════════════════════════════════════════════
+# WARM HUMAN HANDOFF — connect to real people / NGOs
+# ═══════════════════════════════════════════════════════════
+
+# Curated, India-specific organisations that offer real human support.
+_SUPPORT_ORGS: dict[str, list[dict[str, str]]] = {
+    "HEALTH": [
+        {"name": "Family Planning Association of India (FPA India)",
+         "helps_with": "Confidential sexual & reproductive health counselling",
+         "contact": "fpaindia.org", "phone": ""},
+        {"name": "Vandrevala Foundation",
+         "helps_with": "Free mental health support, any time",
+         "contact": "vandrevalafoundation.com", "phone": "1860-2662-2345"},
+        {"name": "Tele-MANAS (Govt of India)",
+         "helps_with": "Govt mental health helpline in regional languages",
+         "contact": "", "phone": "14416"},
+    ],
+    "FINANCE": [
+        {"name": "RBI Financial Literacy Centres (FLCs)",
+         "helps_with": "Free, unbiased money guidance at your local bank",
+         "contact": "Ask any bank branch for the nearest FLC", "phone": ""},
+        {"name": "SEBI SCORES",
+         "helps_with": "Complaints about investments, brokers, mutual funds",
+         "contact": "scores.sebi.gov.in", "phone": "1800-266-7575"},
+        {"name": "National Centre for Financial Education (NCFE)",
+         "helps_with": "Free financial education resources for women",
+         "contact": "ncfe.org.in", "phone": ""},
+    ],
+    "CAREER": [
+        {"name": "JobsForHer",
+         "helps_with": "Jobs, returnships & mentorship for women",
+         "contact": "jobsforher.com", "phone": ""},
+        {"name": "SHEROES",
+         "helps_with": "Women's career community, work-from-home roles",
+         "contact": "sheroes.com", "phone": ""},
+        {"name": "Skill India (NSDC)",
+         "helps_with": "Free skilling & certification near you",
+         "contact": "skillindia.gov.in", "phone": "1800-123-9626"},
+    ],
+}
+
+
+async def find_support_org(pillar: str = "HEALTH", topic: str = "") -> dict[str, Any]:
+    """Return curated real-human / NGO support organisations for a pillar.
+    Used when a user would benefit from talking to an actual person."""
+    orgs = _SUPPORT_ORGS.get((pillar or "").upper(), [])
+    if not orgs:
+        orgs = _SUPPORT_ORGS["HEALTH"]
+    return {
+        "success": True,
+        "pillar": (pillar or "").upper(),
+        "intro": "You don't have to figure this out alone — here are people who can help directly:",
+        "organisations": orgs,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
 # TOOL REGISTRY — add these to tools.py TOOL_REGISTRY
 # ═══════════════════════════════════════════════════════════
 
@@ -765,4 +821,5 @@ ADVANCED_TOOL_REGISTRY = {
     "assess_health_risk": assess_health_risk,
     "check_scheme_eligibility": check_scheme_eligibility,
     "mental_wellbeing_check": mental_wellbeing_check,
+    "find_support_org": find_support_org,
 }
