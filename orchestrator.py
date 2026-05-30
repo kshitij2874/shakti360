@@ -198,6 +198,30 @@ async def process_query(
       4. Check cache, get memory, route to agent, validate, return.
     """
     start_time = time.time()
+
+    # ── SAFETY GATE: crisis detection runs BEFORE everything else ──
+    # Never run a clarifying checklist on someone in danger.
+    try:
+        from safety import detect_crisis
+        crisis = await detect_crisis(query)
+        if crisis:
+            metrics.record_session(
+                latency_ms=(time.time() - start_time) * 1000,
+                pillar="SAFETY",
+                age_band=age_band,
+                hallucination_passed=True,
+            )
+            return {
+                **crisis,
+                "session_id": session_id,
+                "sub_agent": "SAFETY",
+                "age_band": age_band,
+                "latency_ms": round((time.time() - start_time) * 1000, 1),
+                "steps": [{"step": "safety", "detail": "Crisis support surfaced"}],
+            }
+    except Exception as e:
+        logger.warning(f"Crisis detection skipped: {e}")
+
     state = _get_session_state(session_id)
     phase = state.get("phase")
 
