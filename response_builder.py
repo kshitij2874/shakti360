@@ -47,6 +47,7 @@ async def build_full_response(
     memory_context: str = "",
     fallback_system_prompt: str = "",
     model_name: Optional[str] = None,
+    language: str = "English",
 ) -> dict[str, Any]:
     """
     Build a complete structured response with no-truncation guarantees.
@@ -74,6 +75,7 @@ async def build_full_response(
         memory_context=memory_context,
         fallback_system_prompt=fallback_system_prompt,
         model_name=model_name,
+        language=language,
         diagnostics=diagnostics,
     )
 
@@ -87,6 +89,7 @@ async def build_full_response(
         answer_text=answer_text,
         query=query,
         model_name=model_name,
+        language=language,
         diagnostics=diagnostics,
     )
 
@@ -125,6 +128,7 @@ async def _generate_answer_text(
     fallback_system_prompt: str,
     model_name: Optional[str],
     diagnostics: dict,
+    language: str = "English",
 ) -> str:
     """Generate the answer body. Retries up to 3x with larger token budget on truncation."""
     rag_context = _format_rag_context(rag_chunks)
@@ -139,6 +143,7 @@ async def _generate_answer_text(
         framing_prefix=framing_prefix,
         memory_context=memory_context,
         fallback_system_prompt=fallback_system_prompt,
+        language=language,
     )
 
     user_msg = f"Original question from the user:\n{query}"
@@ -190,6 +195,7 @@ def _build_answer_system_prompt(
     framing_prefix: str,
     memory_context: str,
     fallback_system_prompt: str,
+    language: str = "English",
 ) -> str:
     length_hint = {
         "11-24": "roughly 400-700 characters",
@@ -228,6 +234,11 @@ def _build_answer_system_prompt(
         "Plain prose only. NO markdown headers. NO JSON. "
         "Bullet points only when listing 3+ distinct items \u2014 not for general paragraphs. "
         "Write as if talking directly to her, not formatting a document.\n\n"
+        f"LANGUAGE \u2014 CRITICAL:\n"
+        f"Write your ENTIRE response in {language}. "
+        f"{'Use natural, conversational ' + language + '. ' if language != 'English' else ''}"
+        f"{'For Hinglish, mix Hindi and English the way urban Indian women naturally text. ' if language == 'Hinglish' else ''}"
+        "Keep proper nouns, scheme names, and helpline numbers as-is.\n\n"
         "BEGIN THE ANSWER NOW:"
     )
 
@@ -318,6 +329,7 @@ async def _generate_next_steps(
     query: str,
     model_name: Optional[str],
     diagnostics: dict,
+    language: str = "English",
 ) -> list[dict]:
     """Generate exactly 2 next-step suggestions. Falls back to hardcoded on failure."""
     prompt = (
@@ -340,7 +352,8 @@ async def _generate_next_steps(
         "'agent_continue' for another conversational turn\n"
         "- Available tools: find_nearby_clinic, find_nearby_police, lookup_scheme, calculate_sip, "
         "search_jobs_web, analyze_budget, assess_health_risk, mental_wellbeing_check, check_scheme_eligibility\n"
-        f"- Match the tone for age band {age_band}.\n\n"
+        f"- Match the tone for age band {age_band}.\n"
+        f"- Write each label in {language} (keep proper nouns/scheme names as-is).\n\n"
         "Output the JSON array now:"
     )
 

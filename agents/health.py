@@ -9,11 +9,13 @@ import logging
 import os
 from typing import Any
 
+import asyncio
+
 from observability import observe
 from rag import retrieve, format_context
 from tools import get_helplines
-from dual_user import get_framing_for_user
-from persona import get_persona_prefix
+from dual_user import get_user_profile, build_user_context, build_framing_prefix
+from persona import build_persona_prefix
 from response_builder import build_full_response
 
 logger = logging.getLogger("shakti.agents.health")
@@ -50,12 +52,17 @@ async def run(
     Execute the health agent.
     Returns: {response, citations, tools_to_call, rag_sources}
     """
-    # 1. Retrieve RAG context filtered by pillar=HEALTH + age_band
-    rag_chunks = await retrieve(query=query, pillar="HEALTH", age_band=age_band)
+    # 1. Retrieve RAG context + fetch profile concurrently (one profile read, not two)
+    async def _profile():
+        return await get_user_profile(user_id) if user_id else {}
+    rag_chunks, profile = await asyncio.gather(
+        retrieve(query=query, pillar="HEALTH", age_band=age_band),
+        _profile(),
+    )
 
-    # 2. Build dual-user framing + age-tuned persona
-    user_ctx, framing_prefix = await get_framing_for_user(user_id)
-    persona_prefix = await get_persona_prefix(user_id)
+    # 2. Build dual-user framing + age-tuned persona from the single profile
+    framing_prefix = build_framing_prefix(build_user_context(profile))
+    persona_prefix = build_persona_prefix(profile)
     combined_persona = (persona_prefix + "\n\n" + SYSTEM_PROMPT).strip()
 
     # 3. Build structured response with no-truncation guarantees
@@ -71,6 +78,7 @@ async def run(
         memory_context=user_memory_context,
         fallback_system_prompt=SYSTEM_PROMPT,
         model_name=(model_name if model_name != "medgemma" else DEFAULT_MODEL),
+        language=profile.get("language", "English"),
     )
 
     response_text = structured["answer"]

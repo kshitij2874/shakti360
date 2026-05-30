@@ -154,6 +154,8 @@ async def generate_contextual_questions(
     Acknowledges their specific situation — feels like a friend asking, not a bot checklist.
     Falls back to a single filtered template on failure.
     """
+    profile = profile or {}
+    language = profile.get("language", "English")
     profile_hint = ""
     if profile:
         bits = []
@@ -177,6 +179,7 @@ async def generate_contextual_questions(
         "- Acknowledge something specific from their message — show you read it\n"
         "- Sound like a caring, direct friend — not a medical form or checklist\n"
         "- Keep it under 25 words\n"
+        f"- Write the question(s) in {language} (keep proper nouns as-is)\n"
         "- If the user gave enough context to answer fully, output: SKIP\n\n"
         "Output only the question(s), one per line. No preamble, no numbering."
     )
