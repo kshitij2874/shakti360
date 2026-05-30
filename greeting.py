@@ -63,35 +63,14 @@ def _get_last_local_session(user_id: str) -> Optional[dict]:
 # ═══════════════════════════════════════════════════════════
 
 async def _call_gemini(prompt: str, max_tokens: int = 80, temperature: float = 0.4) -> str:
-    """Run the sync Vertex AI SDK in a thread, return text or empty string on failure."""
+    """Delegate to the unified LLM client (DeepSeek → Gemini fallback)."""
     try:
-        import vertexai  # type: ignore
-        from vertexai.generative_models import GenerativeModel  # type: ignore
+        from llm import call_llm
+        text = await call_llm(prompt=prompt, max_tokens=max_tokens, temperature=temperature)
+        return text.strip('"').strip("'")
     except Exception as e:
-        logger.warning(f"Vertex AI SDK unavailable: {e}")
+        logger.warning(f"Greeting LLM call failed: {e}")
         return ""
-
-    def _do() -> str:
-        try:
-            vertexai.init(
-                project=os.getenv("PROJECT_ID", "shakti360"),
-                location=os.getenv("VERTEX_LOCATION", "us-central1"),
-            )
-            model = GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
-            resp = model.generate_content(
-                prompt,
-                generation_config={
-                    "max_output_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-            )
-            return (resp.text or "").strip().strip('"').strip("'")
-        except Exception as e:
-            logger.warning(f"Gemini call failed in greeting: {e}")
-            return ""
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _do)
 
 
 async def extract_life_context(session_data: dict) -> str:

@@ -264,16 +264,10 @@ async def extract_and_save_memories(
     extracted: dict[str, list[str]] = {"events": [], "preferences": [], "concerns": []}
 
     try:
-        import vertexai  # type: ignore
-        from vertexai.generative_models import GenerativeModel  # type: ignore
+        from llm import call_llm
         import json
 
-        model = GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
-        response = model.generate_content(
-            extraction_prompt,
-            generation_config={"max_output_tokens": 300, "temperature": 0.1},
-        )
-        raw = response.text.strip()
+        raw = await call_llm(extraction_prompt, max_tokens=300, temperature=0.1)
         # Parse JSON from response
         if raw.startswith("```"):
             raw = raw.split("```")[1].strip()

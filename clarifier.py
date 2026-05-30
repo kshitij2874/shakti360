@@ -144,31 +144,13 @@ def build_clarification_context(
 
 
 async def _call_gemini(prompt: str, max_tokens: int = 120, temperature: float = 0.2) -> str:
-    """Sync Vertex SDK call wrapped in an executor. Returns text or empty."""
+    """Delegate to the unified LLM client (DeepSeek → Gemini fallback)."""
     try:
-        import vertexai  # type: ignore
-        from vertexai.generative_models import GenerativeModel  # type: ignore
-    except Exception:
+        from llm import call_llm
+        return await call_llm(prompt=prompt, max_tokens=max_tokens, temperature=temperature)
+    except Exception as e:
+        logger.warning(f"Clarifier LLM call failed: {e}")
         return ""
-
-    def _do() -> str:
-        try:
-            vertexai.init(
-                project=os.getenv("PROJECT_ID", "shakti360"),
-                location=os.getenv("VERTEX_LOCATION", "us-central1"),
-            )
-            model = GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
-            resp = model.generate_content(
-                prompt,
-                generation_config={"max_output_tokens": max_tokens, "temperature": temperature},
-            )
-            return (resp.text or "").strip()
-        except Exception as e:
-            logger.warning(f"Clarifier Gemini call failed: {e}")
-            return ""
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _do)
 
 
 async def filter_already_answered(

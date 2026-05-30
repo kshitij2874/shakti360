@@ -540,29 +540,15 @@ async def _call_gemini(
     top_p: float,
     model_name: Optional[str] = None,
 ) -> str:
-    """Run the synchronous Vertex AI SDK call in a thread, return text."""
-    try:
-        from vertexai.generative_models import GenerativeModel  # type: ignore
-    except Exception as e:
-        logger.error(f"Vertex AI SDK unavailable: {e}")
-        raise
-
-    name = model_name or _DEFAULT_MODEL
-
-    def _do_call() -> str:
-        model = GenerativeModel(name)
-        resp = model.generate_content(
-            prompt,
-            generation_config={
-                "max_output_tokens": max_output_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-            },
-        )
-        return (resp.text or "")
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _do_call)
+    """Delegate to the unified LLM client (DeepSeek → Gemini fallback)."""
+    from llm import call_llm
+    return await call_llm(
+        prompt=prompt,
+        max_tokens=max_output_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        model_name=model_name,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
