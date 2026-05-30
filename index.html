@@ -845,7 +845,17 @@ function CrisisCard({ content, helplines }) {
 }
 
 // ─── Chat Message ───
-function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, onUpload, onSkipUpload }) {
+function speakText(text, lang) {
+  try {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance((text || '').slice(0, 600));
+    u.lang = lang || 'en-IN';
+    window.speechSynthesis.speak(u);
+  } catch(e) {}
+}
+
+function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, onUpload, onSkipUpload, speakLang }) {
   const isUser = msg.role === 'user';
   const pillar = PILLAR_STYLES[msg.pillar] || {};
   const isClarifying = !isUser && msg.type === 'clarifying_question';
@@ -954,6 +964,13 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
         {isAnswer && (
           <>
             <CitationChips chips={msg.citation_chips} citations={msg.citations}/>
+            <div className="flex items-center gap-3 mt-2">
+              <button onClick={() => speakText(msg.content, speakLang)} title="Read aloud"
+                className="text-xs flex items-center gap-1 transition hover:opacity-70"
+                style={{color:'var(--kalpana-rose-700)'}}>🔊 Read aloud</button>
+              <button onClick={() => window.speechSynthesis && window.speechSynthesis.cancel()} title="Stop"
+                className="text-xs transition hover:opacity-70" style={{color:'var(--kalpana-text-soft)'}}>⏹ Stop</button>
+            </div>
             <FeedbackBar onFeedback={(v) => onFeedback && onFeedback(msg, v)}/>
             <NextStepsCards steps={msg.next_steps} onPick={(s) => onPickNextStep && onPickNextStep(s)}/>
             {msg.tools_to_call?.length > 0 && msg.awaiting_approval && (
@@ -1227,6 +1244,9 @@ function ChatView({ idToken, user, onResetOnboarding }) {
   const [preferredName, setPreferredName] = useState('');
   const [userMode, setUserMode] = useState('self');
   const [subjectRole, setSubjectRole] = useState('');
+  const [language, setLanguage] = useState('English');
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [greeting, setGreeting] = useState(null);
   const [showGreeting, setShowGreeting] = useState(false);
@@ -1274,6 +1294,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           if (data.profile.preferred_name) setPreferredName(data.profile.preferred_name);
           if (data.profile.user_mode) setUserMode(data.profile.user_mode);
           if (data.profile.subject_role) setSubjectRole(data.profile.subject_role);
+          if (data.profile.language) setLanguage(data.profile.language);
         }
         if (!data.profile?.age_band) setAgeBand('25-40');
       } catch(e) {
@@ -1576,6 +1597,38 @@ function ChatView({ idToken, user, onResetOnboarding }) {
 
   const sendMessage = async () => submitValue(input);
 
+  // ── Voice: BCP-47 codes for speech recognition / synthesis ──
+  const LANG_CODES = {
+    English:'en-IN', Hindi:'hi-IN', Hinglish:'hi-IN', Tamil:'ta-IN',
+    Telugu:'te-IN', Marathi:'mr-IN', Bengali:'bn-IN',
+  };
+  const langCode = LANG_CODES[language] || 'en-IN';
+
+  const toggleListening = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice input isn't supported in this browser. Please type instead."); return; }
+    if (listening) { try { recognitionRef.current?.stop(); } catch(e){} return; }
+
+    const rec = new SR();
+    rec.lang = langCode;
+    rec.interimResults = true;
+    rec.continuous = false;
+    recognitionRef.current = rec;
+    let finalText = '';
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      setInput((finalText + interim).trim());
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    setListening(true);
+    try { rec.start(); } catch(e) { setListening(false); }
+  };
+
   // ── Document upload handler for clarifying doc-requests ──
   const handleUpload = async (file) => {
     if (!file || loading) return;
@@ -1748,6 +1801,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
             onFeedback={handleFeedback}
             onUpload={handleUpload}
             onSkipUpload={handleSkipUpload}
+            speakLang={langCode}
           />
         ))}
         {thinkingSteps.length > 0 && (
@@ -1766,9 +1820,16 @@ function ChatView({ idToken, user, onResetOnboarding }) {
         <div className="flex gap-2 sm:gap-3 max-w-3xl mx-auto">
           <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key==='Enter' && sendMessage()}
-            placeholder={clarifyingActive ? "Type your answer..." : "Tell me what's on your mind today..."}
+            placeholder={listening ? "Listening… speak now" : (clarifyingActive ? "Type your answer..." : "Tell me what's on your mind today...")}
             className="flex-1 rounded-xl px-3 sm:px-4 py-3 text-sm focus:outline-none transition min-w-0"
             style={{background:'var(--kalpana-rose-50)', border:'1px solid var(--kalpana-rose-100)', color:'var(--kalpana-text)'}}/>
+          <button onClick={toggleListening} title={listening ? 'Stop' : 'Speak'}
+            className="flex-shrink-0 rounded-xl px-3 py-3 text-sm transition"
+            style={listening
+              ? {background:'var(--kalpana-rose-500)', color:'white', animation:'pulse 1s infinite'}
+              : {background:'var(--kalpana-rose-50)', color:'var(--kalpana-rose-700)', border:'1px solid var(--kalpana-rose-100)'}}>
+            {listening ? '⏹' : '🎤'}
+          </button>
           <button onClick={sendMessage} disabled={loading || !input.trim()}
             className="kalpana-btn-primary text-sm disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0">
             {loading ? '...' : 'Send'}
