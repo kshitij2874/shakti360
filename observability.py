@@ -245,7 +245,7 @@ class MetricsCollector:
     def get_metrics(self) -> dict[str, Any]:
         avg_latency = self.total_latency_ms / max(self.total_sessions, 1)
         avg_cost = self.total_cost / max(self.total_sessions, 1)
-        hall_rate = 1.0 - (self.hallucination_passes / max(self.hallucination_checks, 1))
+        hall_rate = 0.0 if self.hallucination_checks == 0 else 1.0 - (self.hallucination_passes / self.hallucination_checks)
         total_decisions = self.approvals + self.rejections
         approval_rate = self.approvals / max(total_decisions, 1)
 

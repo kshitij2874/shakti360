@@ -321,8 +321,41 @@ async def reject(request: RejectRequest, user: dict = Depends(verify_token)):
 
 @app.get("/sessions/{user_id}")
 async def get_sessions(user_id: str, user: dict = Depends(verify_token)):
-    """Return last 20 sessions for a user (secured by token UID)."""
+    """Return last 20 sessions for a user — reads from Firestore first, falls back to in-memory."""
     real_user_id = user["uid"]
+
+    # Try Firestore (persists across container restarts)
+    try:
+        from google.cloud import firestore as gcloud_firestore  # type: ignore
+        db = gcloud_firestore.Client()
+        docs = (
+            db.collection("sessions")
+            .where("user_id", "==", real_user_id)
+            .order_by("created_at", direction=gcloud_firestore.Query.DESCENDING)
+            .limit(20)
+            .stream()
+        )
+        sessions = []
+        for doc in docs:
+            d = doc.to_dict() or {}
+            sessions.append({
+                "session_id": d.get("session_id", doc.id),
+                "timestamp": d.get("created_at").timestamp() if hasattr(d.get("created_at"), "timestamp") else 0,
+                "query": d.get("query", ""),
+                "age_band": d.get("age_band", ""),
+                "pillar": d.get("pillar", ""),
+                "latency_ms": 0,
+                "citations_count": len(d.get("citations", [])),
+                "approved": None,
+                "trace_url": d.get("trace_url"),
+                "response_preview": d.get("response_preview") or d.get("answer", "")[:200],
+            })
+        if sessions:
+            return JSONResponse(content={"user_id": real_user_id, "sessions": sessions})
+    except Exception as e:
+        logger.warning(f"Firestore sessions read failed, falling back to in-memory: {e}")
+
+    # Fallback: in-memory history (resets on restart)
     sessions = _session_history.get(real_user_id, [])
     return JSONResponse(content={"user_id": real_user_id, "sessions": sessions[-20:]})
 
