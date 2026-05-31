@@ -1271,9 +1271,12 @@ function ChatView({ idToken, user, onResetOnboarding }) {
   // Persist messages + sessionId across tab switches / page reloads.
   // Strip non-serialisable callbacks before storing.
   useEffect(() => {
+    // Don't rewrite localStorage on every streamed token — wait until the
+    // streaming bubble settles (avoids hundreds of JSON.stringify per answer).
+    if (messages.some(m => m && m._streaming)) return;
     try {
       const safe = messages.map(m => {
-        const { onApprove, onReject, ...rest } = m || {};
+        const { onApprove, onReject, _streaming, _streamId, ...rest } = m || {};
         return rest;
       });
       localStorage.setItem(MSG_KEY, JSON.stringify(safe.slice(-30))); // cap at 30 turns
@@ -1596,9 +1599,13 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     const streamId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
     let gotMeta = false, gotFinal = false;
 
+    let gotToken = false;
     const handleEvent = (ev, dataStr) => {
       let data; try { data = JSON.parse(dataStr); } catch(e) { return; }
-      if (ev === 'meta') {
+      if (ev === 'status') {
+        // Live "what Kalpana is doing" indicator until the answer starts
+        if (!gotMeta) setThinkingSteps([{ step:'status', detail: data.label || 'Working…' }]);
+      } else if (ev === 'meta') {
         gotMeta = true;
         setThinkingSteps([]);
         setMessages(prev => [...prev, {
@@ -1606,6 +1613,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           type: data.type || 'answer', content:'', pillar: data.pillar, session_id: data.session_id,
         }]);
       } else if (ev === 'token') {
+        gotToken = true;
         setMessages(prev => prev.map(m =>
           m._streamId === streamId ? { ...m, content:(m.content||'') + (data.t||'') } : m));
       } else if (ev === 'final') {
@@ -1649,10 +1657,22 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           if (dataLines.length) handleEvent(ev, dataLines.join('\n'));
         }
       }
-      if (!gotMeta && !gotFinal) throw new Error('empty stream');
+      if (!gotFinal) {
+        // Stream ended without a final event.
+        if (gotToken) {
+          // We have partial text — stop the cursor and keep what we got.
+          setMessages(prev => prev.map(m => m._streamId === streamId ? { ...m, _streaming:false } : m));
+          setThinkingSteps([]);
+        } else {
+          // Nothing usable — drop any placeholder and fall back to /chat.
+          setMessages(prev => prev.filter(m => m._streamId !== streamId));
+          await submitValueNonStream(q);
+        }
+      }
     } catch(e) {
       console.warn('Streaming failed, falling back to /chat:', e);
       setMessages(prev => prev.filter(m => m._streamId !== streamId));
+      setThinkingSteps([]);
       await submitValueNonStream(q);
     }
     setLoading(false);

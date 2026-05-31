@@ -22,6 +22,7 @@ from clarifier import (
     is_doc_request,
     build_clarification_context,
     generate_contextual_questions,
+    triage,
 )
 from dual_user import get_user_profile
 import agents.health as health_agent
@@ -267,13 +268,10 @@ async def process_query(
 
     # ── STATE: NEW CONVERSATION ──
     if not phase:
-        # Classify the intent up front so we can ask pillar-tuned questions
-        intent = await classify_intent(query)
-        # Fetch profile for framing
+        # Single triage call: classify intent + decide if clarification is needed
+        # (biased to answer simple/informational questions immediately).
         profile = await get_user_profile(user_id) if user_id else {}
-
-        # Generate 1-2 contextual questions using LLM — adapts to what the user actually said
-        clarifying_qs = await generate_contextual_questions(intent, age_band, query, profile)
+        intent, clarifying_qs = await triage(query, age_band, profile)
 
         # If filter returned 0 questions OR no template available, skip straight to answering
         if not clarifying_qs:
@@ -735,9 +733,9 @@ async def process_query_stream(user_id: str, age_band: str, query: str, session_
 
     # NEW CONVERSATION
     if not phase:
-        intent = await classify_intent(query)
+        yield {"event": "status", "data": {"label": "Understanding your question…"}}
         profile = await get_user_profile(user_id) if user_id else {}
-        clarifying_qs = await generate_contextual_questions(intent, age_band, query, profile)
+        intent, clarifying_qs = await triage(query, age_band, profile)  # single LLM call
 
         if not clarifying_qs:
             await _set_session_state(session_id, {
@@ -820,15 +818,14 @@ async def _stream_answer(user_id, age_band, query, pillar, qa_pairs, session_id,
     next-steps, validation, usage, and persistence-friendly fields."""
     import response_builder as rb
     from llm import call_llm_stream
-    from rag import retrieve_with_web
     from dual_user import build_user_context, build_framing_prefix
     from persona import build_persona_prefix
-    import agents.health as _h  # for SYSTEM_PROMPT lookups per pillar
 
+    # Reuse the already-imported agent modules (no re-import per call)
     SYSTEM_PROMPTS = {
-        "HEALTH": _h.SYSTEM_PROMPT,
-        "FINANCE": __import__("agents.finance", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT,
-        "CAREER": __import__("agents.career", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT,
+        "HEALTH": health_agent.SYSTEM_PROMPT,
+        "FINANCE": finance_agent.SYSTEM_PROMPT,
+        "CAREER": career_agent.SYSTEM_PROMPT,
     }
 
     trace = TraceContext(session_id=session_id, user_id=user_id, metadata={"age_band": age_band})
@@ -857,12 +854,27 @@ async def _stream_answer(user_id, age_band, query, pillar, qa_pairs, session_id,
                                           "latency_ms": round(latency_ms, 1), "usage": cache_usage}}
         return
 
-    # Gather context concurrently
+    # Gather local context concurrently (RAG + profile + memory)
+    from rag import retrieve as _retrieve, web_search_fallback as _web_fallback
+    pillar_label = {"HEALTH": "health", "FINANCE": "finance", "CAREER": "career"}.get(intent, "")
+    yield {"event": "status", "data": {"label": f"Looking through verified {pillar_label} sources…"}}
     memory_context, profile, rag_chunks = await _gather3(
         get_user_memory_context(user_id, query),
         (get_user_profile(user_id) if user_id else _empty_dict()),
-        retrieve_with_web(query=enriched_query, pillar=intent, age_band=age_band),
+        _retrieve(query=enriched_query, pillar=intent, age_band=age_band),
     )
+
+    # Web augmentation when the local corpus is weak/empty (visible to the user)
+    web_mode = os.getenv("WEB_SEARCH_MODE", "fallback").lower()
+    if web_mode != "off":
+        best_sim = max((c.get("similarity", 0.0) for c in rag_chunks), default=0.0)
+        threshold = float(os.getenv("RAG_MIN_SIMILARITY", "0.70"))
+        if web_mode == "always" or not rag_chunks or best_sim < threshold:
+            yield {"event": "status", "data": {"label": "Searching the web for the latest, verified info…"}}
+            web = await _web_fallback(query, intent)
+            if web:
+                rag_chunks = (list(rag_chunks) + web)[:6]
+
     language = profile.get("language", "English")
     framing_prefix = build_framing_prefix(build_user_context(profile))
     persona_prefix = build_persona_prefix(profile)
@@ -880,6 +892,7 @@ async def _stream_answer(user_id, age_band, query, pillar, qa_pairs, session_id,
     next_steps_task = asyncio.create_task(rb.generate_next_steps_public(
         pillar=intent, age_band=age_band, query=query, language=language))
 
+    yield {"event": "status", "data": {"label": "Writing your answer…"}}
     yield {"event": "meta", "data": {
         "type": "answer", "pillar": intent, "sub_agent": intent, "age_band": age_band,
         "session_id": session_id, "answer_tier": answer_tier,

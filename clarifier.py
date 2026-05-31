@@ -143,6 +143,79 @@ def build_clarification_context(
     return "\n".join(lines)
 
 
+async def triage(
+    query: str,
+    age_band: str,
+    profile: Optional[dict] = None,
+) -> tuple[str, list[str]]:
+    """ONE LLM call that both classifies intent AND decides whether a clarifying
+    question is genuinely needed — replacing two sequential calls and biasing
+    hard toward answering simple/informational questions immediately.
+
+    Returns (intent, questions) where questions is usually empty.
+    """
+    profile = profile or {}
+    language = profile.get("language", "English")
+    name = profile.get("preferred_name") or ""
+    role = profile.get("subject_role") or ""
+
+    prompt = (
+        "You are Kalpana, a women's life companion for India. Triage this message.\n\n"
+        f"User message: \"{query}\"\n"
+        f"Age group: {age_band}"
+        + (f" | Known: name={name}" if name else "")
+        + (f", life stage={role}" if role else "")
+        + "\n\n"
+        "Do TWO things:\n"
+        "1. Classify the topic as exactly one of: HEALTH, FINANCE, CAREER.\n"
+        "2. Decide if you NEED a clarifying question before answering.\n\n"
+        "Rules for clarifying:\n"
+        "- DEFAULT TO NOT ASKING. Most questions can be answered directly.\n"
+        "- Ask AT MOST ONE question, and ONLY if a useful answer is impossible "
+        "without it (e.g. she asks for personalized advice that hinges on a "
+        "specific detail she hasn't given).\n"
+        "- For general/informational questions ('what is X', 'how does Y work', "
+        "'tell me about Z'), DO NOT ask anything.\n"
+        "- Never ask something her message or profile already answers.\n"
+        f"- If you do ask, write it in {language}, warm and specific, under 25 words.\n\n"
+        "Respond with ONLY this JSON (no prose, no fences):\n"
+        '{"intent": "HEALTH|FINANCE|CAREER", "clarify": []}\n'
+        "Put a single question string in clarify only when truly necessary."
+    )
+
+    raw = await _call_gemini(prompt, max_tokens=120, temperature=0.1)
+    intent = ""
+    questions: list[str] = []
+    if raw:
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+        text = re.sub(r"\s*```\s*$", "", text)
+        s, e = text.find("{"), text.rfind("}")
+        if s != -1 and e != -1:
+            try:
+                data = json.loads(text[s:e + 1])
+                intent = str(data.get("intent", "")).strip().upper()
+                clar = data.get("clarify", [])
+                if isinstance(clar, str):
+                    clar = [clar] if clar.strip() else []
+                if isinstance(clar, list):
+                    questions = [str(q).strip() for q in clar if str(q).strip()][:1]
+            except Exception:
+                pass
+
+    if intent not in ("HEALTH", "FINANCE", "CAREER"):
+        # cheap keyword fallback (no extra LLM call)
+        q = query.lower()
+        kw = {
+            "HEALTH": ("health", "period", "pregnan", "doctor", "clinic", "menopause", "pain", "symptom", "medicine"),
+            "FINANCE": ("money", "invest", "sip", "loan", "tax", "saving", "scheme", "pension", "bank", "budget"),
+            "CAREER": ("job", "career", "scholarship", "course", "college", "resume", "interview", "skill", "business", "work"),
+        }
+        scores = {k: sum(1 for w in words if w in q) for k, words in kw.items()}
+        intent = max(scores, key=scores.get) if any(scores.values()) else "CAREER"
+
+    return intent, questions
+
+
 async def generate_contextual_questions(
     pillar: str,
     age_band: str,
