@@ -200,8 +200,54 @@ def observe(name: Optional[str] = None):
 
 # ── Metrics Aggregator ──
 
+# ── Metrics persistence (Firestore) so deploys/restarts don't wipe counters ──
+import concurrent.futures
+
+_METRICS_DOC = ("app_metrics", "global")
+_persist_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+_metrics_fs_client = None
+_metrics_fs_checked = False
+
+
+def _metrics_firestore():
+    global _metrics_fs_client, _metrics_fs_checked
+    if _metrics_fs_checked:
+        return _metrics_fs_client
+    _metrics_fs_checked = True
+    try:
+        from google.cloud import firestore  # type: ignore
+        _metrics_fs_client = firestore.Client()
+    except Exception as e:
+        logger.warning(f"Firestore unavailable for metrics persistence: {e}")
+        _metrics_fs_client = None
+    return _metrics_fs_client
+
+
+def _persist_increments(fields: dict) -> None:
+    """Fire-and-forget atomic increments to the global metrics doc (cross-instance safe)."""
+    def _do():
+        try:
+            from google.cloud import firestore  # type: ignore
+            db = _metrics_firestore()
+            if not db:
+                return
+            payload = {}
+            for k, v in fields.items():
+                if isinstance(v, dict):
+                    payload[k] = {sk: firestore.Increment(sv) for sk, sv in v.items()}
+                else:
+                    payload[k] = firestore.Increment(v)
+            db.collection(_METRICS_DOC[0]).document(_METRICS_DOC[1]).set(payload, merge=True)
+        except Exception as e:
+            logger.debug(f"metrics persist skipped: {e}")
+    try:
+        _persist_pool.submit(_do)
+    except Exception:
+        pass
+
+
 class MetricsCollector:
-    """In-memory metrics for the /metrics endpoint."""
+    """Metrics for the /metrics endpoint. In-memory counters mirrored to Firestore."""
 
     def __init__(self):
         self.total_sessions: int = 0
@@ -245,11 +291,55 @@ class MetricsCollector:
         if len(self.latency_history) > 100:
             self.latency_history = self.latency_history[-100:]
 
+        _persist_increments({
+            "total_sessions": 1,
+            "total_latency_ms": latency_ms,
+            "total_cost": cost,
+            "total_prompt_tokens": prompt_tokens,
+            "total_completion_tokens": completion_tokens,
+            "total_tokens": total_tokens or (prompt_tokens + completion_tokens),
+            "hallucination_checks": 1,
+            "hallucination_passes": 1 if hallucination_passed else 0,
+            "pillar_counts": {pillar: 1},
+            "age_band_counts": {age_band: 1},
+        })
+
     def record_approval(self) -> None:
         self.approvals += 1
+        _persist_increments({"approvals": 1})
 
     def record_rejection(self) -> None:
         self.rejections += 1
+        _persist_increments({"rejections": 1})
+
+    def load_persisted(self) -> None:
+        """Load cumulative counters from Firestore on startup so deploys/restarts
+        don't reset the dashboard. (latency_history stays in-memory for the chart.)"""
+        db = _metrics_firestore()
+        if not db:
+            return
+        try:
+            doc = db.collection(_METRICS_DOC[0]).document(_METRICS_DOC[1]).get()
+            if not doc.exists:
+                return
+            d = doc.to_dict() or {}
+            self.total_sessions = int(d.get("total_sessions", 0))
+            self.total_latency_ms = float(d.get("total_latency_ms", 0.0))
+            self.total_cost = float(d.get("total_cost", 0.0))
+            self.total_prompt_tokens = int(d.get("total_prompt_tokens", 0))
+            self.total_completion_tokens = int(d.get("total_completion_tokens", 0))
+            self.total_tokens = int(d.get("total_tokens", 0))
+            self.hallucination_checks = int(d.get("hallucination_checks", 0))
+            self.hallucination_passes = int(d.get("hallucination_passes", 0))
+            self.approvals = int(d.get("approvals", 0))
+            self.rejections = int(d.get("rejections", 0))
+            for k, v in (d.get("pillar_counts") or {}).items():
+                self.pillar_counts[k] = int(v)
+            for k, v in (d.get("age_band_counts") or {}).items():
+                self.age_band_counts[k] = int(v)
+            logger.info(f"Loaded persisted metrics: {self.total_sessions} sessions")
+        except Exception as e:
+            logger.warning(f"Could not load persisted metrics: {e}")
 
     def get_metrics(self) -> dict[str, Any]:
         avg_latency = self.total_latency_ms / max(self.total_sessions, 1)

@@ -108,6 +108,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"RAG ingestion skipped: {e}")
 
+    # Restore cumulative metrics so deploys/restarts don't wipe the dashboard
+    try:
+        metrics.load_persisted()
+    except Exception as e:
+        logger.warning(f"Metrics restore skipped: {e}")
+
     # Init Vertex AI if possible
     try:
         import vertexai

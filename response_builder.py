@@ -64,36 +64,37 @@ async def build_full_response(
         "repairs": [],
     }
 
-    # ── Pass 1: Answer text ──
-    answer_text = await _generate_answer_text(
-        pillar=pillar,
-        age_band=age_band,
-        query=query,
-        clarifying_qa=clarifying_qa,
-        rag_chunks=rag_chunks,
-        persona_prefix=persona_prefix,
-        framing_prefix=framing_prefix,
-        memory_context=memory_context,
-        fallback_system_prompt=fallback_system_prompt,
-        model_name=model_name,
-        language=language,
-        diagnostics=diagnostics,
-        answer_tier=answer_tier,
+    # ── Passes 1 & 3 run concurrently (next-steps depend on query+pillar, not the
+    #    answer body) — saves a full sequential LLM round-trip per turn. ──
+    answer_text, next_steps = await asyncio.gather(
+        _generate_answer_text(
+            pillar=pillar,
+            age_band=age_band,
+            query=query,
+            clarifying_qa=clarifying_qa,
+            rag_chunks=rag_chunks,
+            persona_prefix=persona_prefix,
+            framing_prefix=framing_prefix,
+            memory_context=memory_context,
+            fallback_system_prompt=fallback_system_prompt,
+            model_name=model_name,
+            language=language,
+            diagnostics=diagnostics,
+            answer_tier=answer_tier,
+        ),
+        _generate_next_steps(
+            pillar=pillar,
+            age_band=age_band,
+            answer_text="",  # decoupled from the answer so it can run in parallel
+            query=query,
+            model_name=model_name,
+            language=language,
+            diagnostics=diagnostics,
+        ),
     )
 
     # ── Pass 2: Citations (deterministic) ──
     citation_chips = _extract_citations(rag_chunks)
-
-    # ── Pass 3: Next steps ──
-    next_steps = await _generate_next_steps(
-        pillar=pillar,
-        age_band=age_band,
-        answer_text=answer_text,
-        query=query,
-        model_name=model_name,
-        language=language,
-        diagnostics=diagnostics,
-    )
 
     # ── Validate + repair ──
     response = {
@@ -339,10 +340,11 @@ async def _generate_next_steps(
     language: str = "English",
 ) -> list[dict]:
     """Generate exactly 2 next-step suggestions. Falls back to hardcoded on failure."""
+    answer_hint = f"Your answer (just provided): {answer_text[:500]}...\n" if answer_text else ""
     prompt = (
-        "You are Kalpana suggesting helpful next steps after answering a user's question.\n\n"
+        "You are Kalpana suggesting helpful next steps for a user's question.\n\n"
         f"User's question: {query}\n"
-        f"Your answer (just provided): {answer_text[:500]}...\n"
+        f"{answer_hint}"
         f"Topic: {pillar}\n"
         f"User's age band: {age_band}\n\n"
         "Generate EXACTLY 2 next-step suggestions. Each suggestion offers to help with "
