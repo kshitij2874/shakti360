@@ -127,7 +127,7 @@ async def tavily_search_finance(
         query=enhanced_query,
         search_depth="basic",
         max_results=max_results,
-        topic="finance",
+        topic="general",  # "finance" topic isn't supported on all tavily versions
     )
 
 

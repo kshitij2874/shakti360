@@ -405,6 +405,9 @@ async def health_check():
         "rag": "active" if _vectors_loaded else "loading",
         "memory": "active",
         "observability": "langfuse" if os.getenv("LANGFUSE_PUBLIC_KEY") else "console",
+        "web_search": "configured" if os.getenv("TAVILY_API_KEY") else "not configured",
+        "web_search_mode": os.getenv("WEB_SEARCH_MODE", "fallback"),
+        "llm": "deepseek" if os.getenv("DEEPSEEK_API_KEY") else "gemini",
         "project": os.getenv("PROJECT_ID", "deployfest-kv-2026"),
     })
 

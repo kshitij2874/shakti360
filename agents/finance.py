@@ -12,7 +12,7 @@ from typing import Any
 import asyncio
 
 from observability import observe
-from rag import retrieve, format_context, web_search_fallback
+from rag import retrieve_with_web, format_context
 from tools import get_helplines
 from dual_user import get_user_profile, build_user_context, build_framing_prefix
 from persona import build_persona_prefix
@@ -47,13 +47,9 @@ async def run(
     async def _profile():
         return await get_user_profile(user_id) if user_id else {}
     rag_chunks, profile = await asyncio.gather(
-        retrieve(query=query, pillar="FINANCE", age_band=age_band),
+        retrieve_with_web(query=query, pillar="FINANCE", age_band=age_band),
         _profile(),
     )
-
-    # Web fallback when the local corpus has nothing relevant
-    if not rag_chunks:
-        rag_chunks = await web_search_fallback(query, "FINANCE")
 
     # 2. Build dual-user framing + age-tuned persona from the single profile
     framing_prefix = build_framing_prefix(build_user_context(profile))

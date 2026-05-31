@@ -439,6 +439,42 @@ async def web_search_fallback(query: str, pillar: str) -> list[dict[str, Any]]:
         return []
 
 
+async def retrieve_with_web(
+    query: str,
+    pillar: str,
+    age_band: str,
+    top_k: int = TOP_K,
+) -> list[dict[str, Any]]:
+    """RAG retrieve, then augment with a web search when the local corpus is
+    empty or only weakly relevant. Controlled by env:
+      WEB_SEARCH_MODE   = "fallback" (default) | "always" | "off"
+      RAG_MIN_SIMILARITY = float (default 0.70) — below this, RAG is "weak"
+    Web chunks (is_web=True) are appended so the answer is still grounded.
+    """
+    chunks = await retrieve(query=query, pillar=pillar, age_band=age_band, top_k=top_k)
+
+    mode = os.getenv("WEB_SEARCH_MODE", "fallback").lower()
+    if mode == "off":
+        return chunks
+
+    best_sim = max((c.get("similarity", 0.0) for c in chunks), default=0.0)
+    threshold = float(os.getenv("RAG_MIN_SIMILARITY", "0.70"))
+    weak = (not chunks) or (best_sim < threshold)
+
+    if mode == "always" or weak:
+        web = await web_search_fallback(query, pillar)
+        if web:
+            logger.info(
+                f"Web search used (mode={mode}, best_sim={best_sim:.3f}, "
+                f"threshold={threshold}): +{len(web)} web chunks for {pillar}"
+            )
+            # Keep official chunks first, then web; cap total context size.
+            return (list(chunks) + web)[:6]
+        logger.info(f"Web search yielded no results (mode={mode}, best_sim={best_sim:.3f})")
+
+    return chunks
+
+
 def format_context(chunks: list[dict[str, Any]]) -> str:
     """Format retrieved chunks into a context string for the LLM."""
     if not chunks:
