@@ -222,87 +222,107 @@ async def chat(request: ChatRequest, user: dict = Depends(verify_token)):
             session_id=session_id,
         )
 
-        # Store pending tool calls for human oversight gate
-        tools_to_call = result.get("tools_to_call", [])
-        if tools_to_call:
-            await set_pending_approval(session_id, {
-                "tools": tools_to_call,
-                "user_id": request.user_id,
-                "timestamp": time.time(),
-            })
-
-        # Store session history (in-memory)
-        if request.user_id not in _session_history:
-            _session_history[request.user_id] = []
-        _session_history[request.user_id].append({
-            "session_id": session_id,
-            "timestamp": time.time(),
-            "query": request.query,
-            "age_band": request.age_band,
-            "pillar": result.get("pillar", ""),
-            "latency_ms": result.get("latency_ms", 0),
-            "citations_count": len(result.get("citations", [])),
-            "approved": None,
-            "trace_url": result.get("trace_url"),
-            "response_preview": result.get("response", "")[:200],
-        })
-        # Keep only last 50 per user
-        _session_history[request.user_id] = _session_history[request.user_id][-50:]
-
-        # Only persist sessions + extract memories on final ANSWER turns,
-        # not on intermediate clarifying-question exchanges.
-        is_final_answer = result.get("type", "answer") == "answer"
-
-        # Persist session to Firestore for greeting/context recall
-        if is_final_answer:
-            try:
-                from google.cloud import firestore as gcloud_firestore  # type: ignore
-                db = gcloud_firestore.Client()
-                answer_text = result.get("response", "")
-                session_payload = {
-                    "user_id": request.user_id,
-                    "session_id": session_id,
-                    "query": request.query,
-                    "age_band": request.age_band,
-                    "pillar": result.get("pillar", ""),
-                    "citations": result.get("citations", []),
-                    "clarifying_qa": result.get("clarifying_qa", []),
-                    "answer": answer_text[:1500],
-                    "response_preview": answer_text[:300],
-                    "created_at": gcloud_firestore.SERVER_TIMESTAMP,
-                }
-                db.collection("sessions").document(session_id).set(session_payload, merge=True)
-            except Exception as e:
-                logger.warning(f"Failed to persist session to Firestore: {e}")
-
-            # Async life-context extraction (non-blocking) — patches the same
-            # session doc once Gemini returns. Greeting endpoint reads it later.
-            asyncio.create_task(_extract_and_save_life_context(
-                session_id=session_id,
-                user_id=request.user_id,
-                query=request.query,
-                pillar=result.get("pillar", ""),
-                answer=result.get("response", ""),
-                clarifying_qa=result.get("clarifying_qa", []),
-            ))
-
-        # Async memory extraction (non-blocking) — only on final answer
-        if is_final_answer:
-            asyncio.create_task(
-                extract_and_save_memories(
-                    user_id=request.user_id,
-                    conversation=[
-                        {"role": "user", "content": request.query},
-                        {"role": "assistant", "content": result.get("response", "")},
-                    ],
-                )
-            )
-
+        await _persist_turn_artifacts(
+            user_id=request.user_id, age_band=request.age_band,
+            query=request.query, session_id=session_id, result=result,
+        )
         return JSONResponse(content=result)
 
     except Exception as e:
         logger.error(f"Chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _persist_turn_artifacts(*, user_id: str, age_band: str, query: str,
+                                  session_id: str, result: dict) -> None:
+    """Shared post-turn persistence used by both /chat and /chat/stream:
+    queue pending tools, record session history, persist final answers to
+    Firestore, and kick off async life-context + memory extraction."""
+    tools_to_call = result.get("tools_to_call", [])
+    if tools_to_call:
+        await set_pending_approval(session_id, {
+            "tools": tools_to_call, "user_id": user_id, "timestamp": time.time(),
+        })
+
+    _session_history.setdefault(user_id, []).append({
+        "session_id": session_id,
+        "timestamp": time.time(),
+        "query": query,
+        "age_band": age_band,
+        "pillar": result.get("pillar", ""),
+        "latency_ms": result.get("latency_ms", 0),
+        "citations_count": len(result.get("citations", [])),
+        "approved": None,
+        "trace_url": result.get("trace_url"),
+        "response_preview": result.get("response", "")[:200],
+    })
+    _session_history[user_id] = _session_history[user_id][-50:]
+
+    if result.get("type", "answer") != "answer":
+        return  # don't persist clarifying-question / crisis turns
+
+    try:
+        from google.cloud import firestore as gcloud_firestore  # type: ignore
+        db = gcloud_firestore.Client()
+        answer_text = result.get("response", "")
+        db.collection("sessions").document(session_id).set({
+            "user_id": user_id, "session_id": session_id, "query": query,
+            "age_band": age_band, "pillar": result.get("pillar", ""),
+            "citations": result.get("citations", []),
+            "clarifying_qa": result.get("clarifying_qa", []),
+            "answer": answer_text[:1500], "response_preview": answer_text[:300],
+            "created_at": gcloud_firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+    except Exception as e:
+        logger.warning(f"Failed to persist session to Firestore: {e}")
+
+    asyncio.create_task(_extract_and_save_life_context(
+        session_id=session_id, user_id=user_id, query=query,
+        pillar=result.get("pillar", ""), answer=result.get("response", ""),
+        clarifying_qa=result.get("clarifying_qa", []),
+    ))
+    asyncio.create_task(extract_and_save_memories(
+        user_id=user_id,
+        conversation=[
+            {"role": "user", "content": query},
+            {"role": "assistant", "content": result.get("response", "")},
+        ],
+    ))
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest, user: dict = Depends(verify_token)):
+    """Streaming chat (SSE). Streams the answer body token-by-token; emits a
+    final event with citations, next-steps, usage, and validation."""
+    import json
+    request.user_id = user["uid"]
+    session_id = request.session_id or str(uuid.uuid4())[:12]
+
+    async def event_stream():
+        final_result = None
+        try:
+            from orchestrator import process_query_stream
+            async for evt in process_query_stream(
+                user_id=request.user_id, age_band=request.age_band,
+                query=request.query, session_id=session_id,
+            ):
+                if evt.get("event") == "final":
+                    final_result = evt["data"]
+                yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+
+            if final_result:
+                await _persist_turn_artifacts(
+                    user_id=request.user_id, age_band=request.age_band,
+                    query=request.query, session_id=session_id, result=final_result,
+                )
+        except Exception as e:
+            logger.error(f"Chat stream error: {e}", exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",  # disable proxy buffering so tokens flush live
+    })
 
 
 @app.post("/approve")

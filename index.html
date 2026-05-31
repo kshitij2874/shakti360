@@ -922,6 +922,11 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
         )}
         <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{wordBreak:'break-word'}}>
           {msg.content}
+          {msg._streaming && (
+            msg.content
+              ? <span className="inline-block w-1.5 h-4 ml-0.5 align-middle" style={{background:'var(--kalpana-rose-400)', animation:'pulse 1s infinite'}}></span>
+              : <span className="text-xs italic" style={{color:'var(--kalpana-text-soft)'}}>Kalpana is thinking…</span>
+          )}
         </div>
 
         {/* DOC REQUEST clarifying question: show upload + skip, hide yes/no pills */}
@@ -960,8 +965,8 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
           </div>
         )}
 
-        {/* Answer-only affordances */}
-        {isAnswer && (
+        {/* Answer-only affordances (hidden while still streaming) */}
+        {isAnswer && !msg._streaming && (
           <>
             <CitationChips chips={msg.citation_chips} citations={msg.citations}/>
             <div className="flex items-center gap-3 mt-2">
@@ -1550,6 +1555,35 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     messages[messages.length - 1]?.role === 'assistant' &&
     messages[messages.length - 1]?.type === 'clarifying_question';
 
+  // Build the full assistant message object from a final result payload
+  const assistantMsgFromData = (data) => ({
+    role:'assistant', type: data.type || 'answer', content: data.response,
+    pillar: data.pillar, citations: data.citations, citation_chips: data.citation_chips,
+    next_steps: data.next_steps, tools_to_call: data.tools_to_call,
+    awaiting_approval: data.awaiting_approval, session_id: data.session_id,
+    latency_ms: data.latency_ms, from_cache: data.from_cache, usage: data.usage,
+    is_crisis: data.is_crisis, helplines: data.helplines,
+    is_yes_no: data.is_yes_no, is_doc_request: data.is_doc_request,
+    question_index: data.question_index, questions_total: data.questions_total,
+    onApprove: handleApprove, onReject: handleReject,
+  });
+
+  // Fallback: classic non-streaming /chat (user bubble already shown)
+  const submitValueNonStream = async (q) => {
+    setThinkingSteps([{ step:'classifying', detail:'Thinking...' }]);
+    try {
+      const res = await fetch(`${API}/chat`, {
+        method:'POST', headers:authHeaders,
+        body:JSON.stringify({ user_id:userId, age_band:ageBand, query:q, session_id:sessionId }),
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, assistantMsgFromData(data)]);
+    } catch(e) {
+      setMessages(prev => [...prev, { role:'assistant', content:'Sorry, something went wrong. Please try again.' }]);
+    }
+    setThinkingSteps([]);
+  };
+
   const submitValue = async (rawValue) => {
     const q = (rawValue || '').toString().trim();
     if (!q || loading || !ageBand) return;
@@ -1559,44 +1593,67 @@ function ChatView({ idToken, user, onResetOnboarding }) {
     setLoading(true);
     setThinkingSteps([{ step:'classifying', detail:'Thinking...' }]);
 
+    const streamId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    let gotMeta = false, gotFinal = false;
+
+    const handleEvent = (ev, dataStr) => {
+      let data; try { data = JSON.parse(dataStr); } catch(e) { return; }
+      if (ev === 'meta') {
+        gotMeta = true;
+        setThinkingSteps([]);
+        setMessages(prev => [...prev, {
+          role:'assistant', _streamId: streamId, _streaming: true,
+          type: data.type || 'answer', content:'', pillar: data.pillar, session_id: data.session_id,
+        }]);
+      } else if (ev === 'token') {
+        setMessages(prev => prev.map(m =>
+          m._streamId === streamId ? { ...m, content:(m.content||'') + (data.t||'') } : m));
+      } else if (ev === 'final') {
+        gotFinal = true;
+        setThinkingSteps([]);
+        if (gotMeta) {
+          setMessages(prev => prev.map(m => m._streamId === streamId
+            ? { ...assistantMsgFromData(data), _streamId: streamId, _streaming: false,
+                content: (data.response ?? m.content) }
+            : m));
+        } else {
+          setMessages(prev => [...prev, assistantMsgFromData(data)]);
+        }
+      } else if (ev === 'error') {
+        throw new Error(data.detail || 'stream error');
+      }
+    };
+
     try {
-      const res = await fetch(`${API}/chat`, {
+      const res = await fetch(`${API}/chat/stream`, {
         method:'POST', headers:authHeaders,
         body:JSON.stringify({ user_id:userId, age_band:ageBand, query:q, session_id:sessionId }),
       });
-      const data = await res.json();
-      setThinkingSteps(data.steps || []);
-      setTimeout(() => {
-        setMessages(prev => [...prev, {
-          role:'assistant',
-          type: data.type || 'answer',
-          content: data.response,
-          pillar: data.pillar,
-          citations: data.citations,
-          citation_chips: data.citation_chips,
-          next_steps: data.next_steps,
-          tools_to_call: data.tools_to_call,
-          awaiting_approval: data.awaiting_approval,
-          session_id: data.session_id,
-          latency_ms: data.latency_ms,
-          from_cache: data.from_cache,
-          usage: data.usage,
-          // crisis fields
-          is_crisis: data.is_crisis,
-          helplines: data.helplines,
-          // clarifying-question fields
-          is_yes_no: data.is_yes_no,
-          is_doc_request: data.is_doc_request,
-          question_index: data.question_index,
-          questions_total: data.questions_total,
-          onApprove: handleApprove,
-          onReject: handleReject,
-        }]);
-        setThinkingSteps([]);
-      }, 400);
+      if (!res.ok || !res.body) throw new Error('stream unavailable');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream:true });
+        let sep;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sep); buffer = buffer.slice(sep + 2);
+          let ev = 'message'; const dataLines = [];
+          block.split('\n').forEach(line => {
+            if (line.startsWith('event:')) ev = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+          });
+          if (dataLines.length) handleEvent(ev, dataLines.join('\n'));
+        }
+      }
+      if (!gotMeta && !gotFinal) throw new Error('empty stream');
     } catch(e) {
-      setMessages(prev => [...prev, { role:'assistant', content:'Sorry, something went wrong. Please try again.' }]);
-      setThinkingSteps([]);
+      console.warn('Streaming failed, falling back to /chat:', e);
+      setMessages(prev => prev.filter(m => m._streamId !== streamId));
+      await submitValueNonStream(q);
     }
     setLoading(false);
   };

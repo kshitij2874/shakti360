@@ -6,6 +6,7 @@ orchestrator.py — Root ADK agent with exactly 3 responsibilities:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -697,3 +698,264 @@ async def _generate_full_answer(
         result["trace_url"] = trace_url
 
     return result
+
+
+# ═══════════════════════════════════════════════════════
+# STREAMING FLOW (SSE) — streams the answer body token-by-token.
+# Non-answer turns (clarifying question, crisis, cache hit) emit a single
+# "final" event. The non-streaming process_query() above remains the fallback.
+# ═══════════════════════════════════════════════════════
+
+async def process_query_stream(user_id: str, age_band: str, query: str, session_id: str):
+    """Async generator yielding {"event": meta|token|final|error, "data": {...}}."""
+    start_time = time.time()
+    start_usage()
+
+    # Safety gate first
+    try:
+        from safety import detect_crisis
+        crisis = await detect_crisis(query)
+        if crisis:
+            metrics.record_session(
+                latency_ms=(time.time() - start_time) * 1000,
+                pillar="SAFETY", age_band=age_band, hallucination_passed=True,
+                cost=get_usage().get("cost_usd", 0.0),
+            )
+            yield {"event": "final", "data": {
+                **crisis, "session_id": session_id, "sub_agent": "SAFETY",
+                "age_band": age_band, "latency_ms": round((time.time() - start_time) * 1000, 1),
+                "usage": get_usage(),
+            }}
+            return
+    except Exception as e:
+        logger.warning(f"Crisis detection skipped (stream): {e}")
+
+    state = await _get_session_state(session_id)
+    phase = state.get("phase")
+
+    # NEW CONVERSATION
+    if not phase:
+        intent = await classify_intent(query)
+        profile = await get_user_profile(user_id) if user_id else {}
+        clarifying_qs = await generate_contextual_questions(intent, age_band, query, profile)
+
+        if not clarifying_qs:
+            await _set_session_state(session_id, {
+                "phase": "answering_inline", "pillar": intent,
+                "original_query": query, "qa_pairs": [],
+            })
+            async for evt in _stream_answer(user_id, age_band, query, intent, [], session_id, start_time):
+                yield evt
+            return
+
+        await _set_session_state(session_id, {
+            "phase": "clarifying", "pillar": intent, "original_query": query,
+            "clarifying_questions": clarifying_qs, "qa_pairs": [], "asked_index": 0,
+        })
+        first_q = clarifying_qs[0]
+        yield {"event": "final", "data": {
+            "type": "clarifying_question", "response": first_q, "question": first_q,
+            "is_yes_no": is_yes_no(first_q), "is_doc_request": is_doc_request(first_q),
+            "question_index": 0, "questions_total": len(clarifying_qs),
+            "pillar": intent, "sub_agent": intent, "age_band": age_band,
+            "session_id": session_id, "citations": [], "tools_to_call": [],
+            "latency_ms": round((time.time() - start_time) * 1000, 1),
+        }}
+        return
+
+    # CLARIFYING
+    if phase == "clarifying":
+        clarifying_qs = state.get("clarifying_questions", [])
+        idx = state.get("asked_index", 0)
+        qa_pairs = state.get("qa_pairs", [])
+        if idx < len(clarifying_qs):
+            qa_pairs.append({"q": clarifying_qs[idx], "a": query})
+        new_idx = idx + 1
+        if new_idx < len(clarifying_qs):
+            next_q = clarifying_qs[new_idx]
+            await _set_session_state(session_id, {**state, "qa_pairs": qa_pairs, "asked_index": new_idx})
+            yield {"event": "final", "data": {
+                "type": "clarifying_question", "response": next_q, "question": next_q,
+                "is_yes_no": is_yes_no(next_q), "is_doc_request": is_doc_request(next_q),
+                "question_index": new_idx, "questions_total": len(clarifying_qs),
+                "pillar": state.get("pillar"), "sub_agent": state.get("pillar"),
+                "age_band": age_band, "session_id": session_id, "citations": [], "tools_to_call": [],
+                "latency_ms": round((time.time() - start_time) * 1000, 1),
+            }}
+            return
+        await _set_session_state(session_id, {**state, "qa_pairs": qa_pairs, "phase": "answering"})
+        async for evt in _stream_answer(user_id, age_band, state.get("original_query", query),
+                                        state.get("pillar"), qa_pairs, session_id, start_time):
+            yield evt
+        return
+
+    # DONE — follow-up or new topic
+    last_pillar = state.get("last_pillar")
+    last_query = state.get("last_query")
+    last_answer = state.get("last_answer_preview", "")
+    is_followup = False
+    if last_pillar and last_query:
+        is_followup = await _is_followup(new_query=query, last_query=last_query, last_pillar=last_pillar)
+
+    if is_followup:
+        new_intent = await classify_intent(query)
+        prior_qa = state.get("qa_pairs", []) or []
+        followup_history = list(prior_qa)
+        if last_answer:
+            followup_history.append({"q": f"(previous answer about {last_pillar.lower()})", "a": last_answer})
+        followup_history.append({"q": "User's follow-up", "a": query})
+        await _set_session_state(session_id, {**state, "phase": "answering", "pillar": new_intent})
+        async for evt in _stream_answer(user_id, age_band, query, new_intent, followup_history, session_id, start_time):
+            yield evt
+        return
+
+    # New topic — reset and restart the stream
+    await _clear_session_state(session_id)
+    async for evt in process_query_stream(user_id=user_id, age_band=age_band, query=query, session_id=session_id):
+        yield evt
+
+
+async def _stream_answer(user_id, age_band, query, pillar, qa_pairs, session_id, start_time):
+    """Stream the final answer body, then emit a 'final' event with citations,
+    next-steps, validation, usage, and persistence-friendly fields."""
+    import response_builder as rb
+    from llm import call_llm_stream
+    from rag import retrieve_with_web
+    from dual_user import build_user_context, build_framing_prefix
+    from persona import build_persona_prefix
+    import agents.health as _h  # for SYSTEM_PROMPT lookups per pillar
+
+    SYSTEM_PROMPTS = {
+        "HEALTH": _h.SYSTEM_PROMPT,
+        "FINANCE": __import__("agents.finance", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT,
+        "CAREER": __import__("agents.career", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT,
+    }
+
+    trace = TraceContext(session_id=session_id, user_id=user_id, metadata={"age_band": age_band})
+    trace.start_trace("shakti_orchestrator_stream")
+
+    intent = (pillar or "").upper()
+    if intent not in ("HEALTH", "FINANCE", "CAREER"):
+        intent = await classify_intent(query)
+
+    enriched_query = build_clarification_context(query, qa_pairs)
+
+    # Cache hit → single final event (already instant)
+    cached = await get_cached_response(enriched_query, age_band, intent)
+    if cached:
+        latency_ms = (time.time() - start_time) * 1000
+        cache_usage = get_usage()
+        metrics.record_session(latency_ms, intent, age_band, cost=cache_usage.get("cost_usd", 0.0),
+                               prompt_tokens=cache_usage.get("prompt_tokens", 0),
+                               completion_tokens=cache_usage.get("completion_tokens", 0),
+                               total_tokens=cache_usage.get("total_tokens", 0))
+        prior_state = await _get_session_state(session_id)
+        await _set_session_state(session_id, {**prior_state, "phase": "done", "last_pillar": intent,
+                                              "last_query": prior_state.get("original_query") or query,
+                                              "last_answer_preview": (cached.get("response") or "")[:600]})
+        yield {"event": "final", "data": {**cached, "from_cache": True, "type": "answer",
+                                          "latency_ms": round(latency_ms, 1), "usage": cache_usage}}
+        return
+
+    # Gather context concurrently
+    memory_context, profile, rag_chunks = await _gather3(
+        get_user_memory_context(user_id, query),
+        (get_user_profile(user_id) if user_id else _empty_dict()),
+        retrieve_with_web(query=enriched_query, pillar=intent, age_band=age_band),
+    )
+    language = profile.get("language", "English")
+    framing_prefix = build_framing_prefix(build_user_context(profile))
+    persona_prefix = build_persona_prefix(profile)
+    combined_persona = (persona_prefix + "\n\n" + SYSTEM_PROMPTS.get(intent, "")).strip()
+    answer_tier = choose_answer_tier(query, qa_pairs, intent)
+
+    prompt = rb.compose_answer_prompt(
+        pillar=intent, age_band=age_band, query=query, clarifying_qa=[],
+        rag_chunks=rag_chunks, persona_prefix=combined_persona, framing_prefix=framing_prefix,
+        memory_context=memory_context, fallback_system_prompt=SYSTEM_PROMPTS.get(intent, ""),
+        language=language,
+    )
+
+    # next-steps run concurrently while the answer streams
+    next_steps_task = asyncio.create_task(rb.generate_next_steps_public(
+        pillar=intent, age_band=age_band, query=query, language=language))
+
+    yield {"event": "meta", "data": {
+        "type": "answer", "pillar": intent, "sub_agent": intent, "age_band": age_band,
+        "session_id": session_id, "answer_tier": answer_tier,
+        "steps": [{"step": "classified", "detail": f"Intent: {intent}"},
+                  {"step": "answering", "detail": "Composing your answer..."}],
+    }}
+
+    full = ""
+    async for delta in call_llm_stream(prompt, max_tokens=rb.TOKEN_BUDGETS["answer"],
+                                       temperature=0.7, top_p=0.9, tier=answer_tier):
+        full += delta
+        yield {"event": "token", "data": {"t": delta}}
+
+    citation_chips = rb._extract_citations(rag_chunks)
+    citations = []
+    for chunk in rag_chunks:
+        sref = chunk.get("source_ref", "")
+        if sref and sref not in citations:
+            citations.append(sref)
+    try:
+        next_steps = await next_steps_task
+    except Exception:
+        next_steps = rb._fallback_next_steps(intent)
+
+    validation = await run_all_validations(response_text=full, rag_sources=rag_chunks,
+                                           age_band=age_band, pillar=intent)
+    latency_ms = (time.time() - start_time) * 1000
+    usage = get_usage()
+
+    result = {
+        "type": "answer", "response": full, "sub_agent": intent, "pillar": intent,
+        "age_band": age_band, "citations": citations, "citation_chips": citation_chips,
+        "next_steps": next_steps, "tools_to_call": [], "awaiting_approval": False,
+        "session_id": session_id,
+        "validation": {
+            "all_passed": validation["all_passed"],
+            "citation_check": validation["citation_check"]["passed"],
+            "age_check": validation["age_appropriateness_check"]["passed"],
+            "safety_check": validation["domain_safety_check"]["passed"],
+        },
+        "latency_ms": round(latency_ms, 1), "from_cache": False,
+        "clarifying_qa": qa_pairs, "usage": usage,
+    }
+
+    metrics.record_session(latency_ms=latency_ms, pillar=intent, age_band=age_band,
+                           hallucination_passed=validation["all_passed"],
+                           cost=usage.get("cost_usd", 0.0),
+                           prompt_tokens=usage.get("prompt_tokens", 0),
+                           completion_tokens=usage.get("completion_tokens", 0),
+                           total_tokens=usage.get("total_tokens", 0))
+
+    cache_data = {k: v for k, v in result.items() if k not in ("latency_ms", "from_cache", "usage")}
+    await set_cached_response(enriched_query, age_band, intent, cache_data)
+
+    prior_state = await _get_session_state(session_id)
+    await _set_session_state(session_id, {**prior_state, "phase": "done", "last_pillar": intent,
+                                          "last_query": prior_state.get("original_query") or query,
+                                          "last_answer_preview": (full or "")[:600]})
+
+    trace.add_generation(name=f"{intent.lower()}_response_stream", model=DEFAULT_MODEL,
+                         input_text=enriched_query, output_text=full,
+                         usage={"input": usage.get("prompt_tokens", 0), "output": usage.get("completion_tokens", 0),
+                                "total": usage.get("total_tokens", 0), "unit": "TOKENS"},
+                         metadata={"age_band": age_band, "pillar": intent, "cost_usd": round(usage.get("cost_usd", 0.0), 6),
+                                   "streamed": True})
+    trace_url = trace.finalize()
+    if trace_url:
+        result["trace_url"] = trace_url
+
+    yield {"event": "final", "data": result}
+
+
+async def _gather3(a, b, c):
+    import asyncio as _a
+    return await _a.gather(a, b, c)
+
+
+async def _empty_dict():
+    return {}

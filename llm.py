@@ -137,6 +137,79 @@ async def _call_deepseek(
     return (response.choices[0].message.content or "").strip()
 
 
+# ── Streaming ─────────────────────────────────────────────────────────────────
+
+async def call_llm_stream(
+    prompt: str,
+    max_tokens: int = 1200,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    tier: str = "fast",
+):
+    """Async generator yielding answer text deltas. Streams from DeepSeek;
+    if DeepSeek isn't configured or fails before any token, falls back to a
+    single (non-streamed) Gemini chunk."""
+    if os.getenv("DEEPSEEK_API_KEY", ""):
+        yielded = False
+        try:
+            async for delta in _stream_deepseek(prompt, max_tokens, temperature, top_p, tier):
+                yielded = True
+                yield delta
+            return
+        except Exception as e:
+            if yielded:
+                logger.error(f"DeepSeek stream broke mid-response: {e}")
+                return  # partial answer already delivered; don't double up
+            logger.warning(f"DeepSeek stream failed before output ({e}) — Gemini fallback")
+
+    text = await _call_gemini(prompt, max_tokens, temperature, top_p, _gemini_model_for(tier))
+    if text:
+        yield text
+
+
+async def _stream_deepseek(prompt, max_tokens, temperature, top_p, tier):
+    from openai import AsyncOpenAI  # type: ignore
+
+    model = _deepseek_model_for(tier)
+    thinking = (tier == "reasoning")
+    client = AsyncOpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url=DEEPSEEK_BASE_URL)
+
+    kwargs: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if thinking:
+        kwargs["extra_body"] = {"thinking": {"type": "enabled"}, "reasoning_effort": DEEPSEEK_REASONING_EFFORT}
+    else:
+        kwargs["temperature"] = temperature
+        kwargs["top_p"] = top_p
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    pt = ct = cached = 0
+    stream = await client.chat.completions.create(**kwargs)
+    async for chunk in stream:
+        u = getattr(chunk, "usage", None)
+        if u:
+            pt = u.prompt_tokens or 0
+            ct = u.completion_tokens or 0
+            extra = getattr(u, "model_extra", None) or {}
+            cached = getattr(u, "prompt_cache_hit_tokens", None) or extra.get("prompt_cache_hit_tokens", 0) or 0
+        if getattr(chunk, "choices", None):
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)  # ignore reasoning_content (CoT)
+            if content:
+                yield content
+
+    try:
+        from usage import record_usage
+        record_usage(model, pt, ct, cached)
+    except Exception as e:
+        logger.debug(f"usage record (deepseek stream) skipped: {e}")
+
+
 # ── Gemini (Vertex AI) fallback ───────────────────────────────────────────────
 
 async def _call_gemini(

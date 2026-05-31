@@ -248,6 +248,47 @@ def _build_answer_system_prompt(
     )
 
 
+def compose_answer_prompt(
+    *,
+    pillar: str,
+    age_band: str,
+    query: str,
+    clarifying_qa: Optional[list] = None,
+    rag_chunks: Optional[list] = None,
+    persona_prefix: str = "",
+    framing_prefix: str = "",
+    memory_context: str = "",
+    fallback_system_prompt: str = "",
+    language: str = "English",
+) -> str:
+    """Build the full answer prompt (system + user msg) — shared by the
+    non-streaming builder and the streaming orchestrator path."""
+    rag_context = _format_rag_context(rag_chunks or [])
+    qa_context = _format_qa_context(clarifying_qa or [])
+    system_prompt = _build_answer_system_prompt(
+        pillar=pillar,
+        age_band=age_band,
+        rag_context=rag_context,
+        qa_context=qa_context,
+        persona_prefix=persona_prefix,
+        framing_prefix=framing_prefix,
+        memory_context=memory_context,
+        fallback_system_prompt=fallback_system_prompt,
+        language=language,
+    )
+    return f"{system_prompt}\n\nOriginal question from the user:\n{query}"
+
+
+async def generate_next_steps_public(
+    *, pillar: str, age_band: str, query: str, model_name=None, language: str = "English"
+) -> list[dict]:
+    """Public wrapper so the streaming path can generate next-steps concurrently."""
+    return await _generate_next_steps(
+        pillar=pillar, age_band=age_band, answer_text="", query=query,
+        model_name=model_name, language=language, diagnostics={"next_steps_attempts": 0, "repairs": []},
+    )
+
+
 # ═══════════════════════════════════════════════════════════
 # PASS 2: CITATIONS (deterministic, no LLM)
 # ═══════════════════════════════════════════════════════════
