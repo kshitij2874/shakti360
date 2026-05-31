@@ -117,6 +117,22 @@ async def _call_deepseek(
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     response = await client.chat.completions.create(**kwargs)
+
+    # Record token usage + cost (cache-hit tokens billed cheaper when reported)
+    try:
+        from usage import record_usage
+        u = response.usage
+        if u:
+            extra = getattr(u, "model_extra", None) or {}
+            cached = (
+                getattr(u, "prompt_cache_hit_tokens", None)
+                or extra.get("prompt_cache_hit_tokens", 0)
+                or 0
+            )
+            record_usage(model, u.prompt_tokens or 0, u.completion_tokens or 0, cached)
+    except Exception as e:
+        logger.debug(f"usage record (deepseek) skipped: {e}")
+
     # Final answer is always in content (reasoning_content holds the CoT, ignored here).
     return (response.choices[0].message.content or "").strip()
 
@@ -150,7 +166,7 @@ async def _call_gemini(
         SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold=HarmBlockThreshold.BLOCK_NONE),
     ]
 
-    def _do_call() -> str:
+    def _do_call():
         model = GenerativeModel(name)
         resp = model.generate_content(
             prompt,
@@ -161,7 +177,25 @@ async def _call_gemini(
             },
             safety_settings=safety_settings,
         )
-        return (resp.text or "").strip()
+        meta = getattr(resp, "usage_metadata", None)
+        usage = None
+        if meta is not None:
+            usage = (
+                getattr(meta, "prompt_token_count", 0) or 0,
+                getattr(meta, "candidates_token_count", 0) or 0,
+                getattr(meta, "cached_content_token_count", 0) or 0,
+            )
+        return (resp.text or "").strip(), usage
 
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _do_call)
+    text, usage = await loop.run_in_executor(None, _do_call)
+
+    # Record usage in the async context (ContextVars don't cross into executor threads)
+    if usage:
+        try:
+            from usage import record_usage
+            record_usage(name, usage[0], usage[1], usage[2])
+        except Exception as e:
+            logger.debug(f"usage record (gemini) skipped: {e}")
+
+    return text

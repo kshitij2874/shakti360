@@ -982,7 +982,12 @@ function ChatMessage({ msg, isLatest, onQuickReply, onPickNextStep, onFeedback, 
               </div>
             )}
             {msg.latency_ms && (
-              <div className="text-[10px] mt-3" style={{color:'var(--kalpana-text-soft)'}}>{msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}</div>
+              <div className="text-[10px] mt-3" style={{color:'var(--kalpana-text-soft)'}}>
+                {msg.latency_ms}ms {msg.from_cache ? '(cached)' : ''}
+                {msg.usage && msg.usage.total_tokens > 0 && (
+                  <> · {Number(msg.usage.total_tokens).toLocaleString()} tokens · ${Number(msg.usage.cost_usd||0).toFixed(5)}</>
+                )}
+              </div>
             )}
           </>
         )}
@@ -1575,6 +1580,7 @@ function ChatView({ idToken, user, onResetOnboarding }) {
           session_id: data.session_id,
           latency_ms: data.latency_ms,
           from_cache: data.from_cache,
+          usage: data.usage,
           // crisis fields
           is_crisis: data.is_crisis,
           helplines: data.helplines,
@@ -1898,10 +1904,20 @@ function DashboardView() {
 
   if (!data) return <div className="flex items-center justify-center h-[calc(100vh-72px)]" style={{color:'var(--kalpana-text-soft)'}}>Loading metrics...</div>;
 
+  const fmtUsd = (n) => {
+    const v = Number(n || 0);
+    if (v === 0) return '$0';
+    if (v < 0.01) return `$${v.toFixed(5)}`;
+    return `$${v.toFixed(4)}`;
+  };
+  const fmtNum = (n) => Number(n || 0).toLocaleString();
   const cards = [
     { label:'Total Sessions', value:data.total_sessions, icon:'📊', color:'var(--kalpana-rose-700)' },
     { label:'Avg Latency', value:`${data.avg_latency_ms}ms`, icon:'⚡', color:'#b8772b' },
-    { label:'Avg Cost/Session', value:`$${data.avg_cost_per_session}`, icon:'💵', color:'#4a7a3f' },
+    { label:'Avg Cost/Session', value:fmtUsd(data.avg_cost_per_session), icon:'💵', color:'#4a7a3f' },
+    { label:'Total Cost', value:fmtUsd(data.total_cost_usd), icon:'🧾', color:'#4a7a3f' },
+    { label:'Avg Tokens/Session', value:fmtNum(data.avg_tokens_per_session), icon:'🔢', color:'#6d4ed4' },
+    { label:'Total Tokens', value:fmtNum(data.total_tokens), icon:'🪙', color:'#6d4ed4' },
     { label:'Hallucination Rate', value:`${(data.hallucination_rate*100).toFixed(1)}%`, icon:'🛡️', color:'var(--kalpana-rose-500)' },
   ];
 

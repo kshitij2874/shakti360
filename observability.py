@@ -207,6 +207,9 @@ class MetricsCollector:
         self.total_sessions: int = 0
         self.total_latency_ms: float = 0.0
         self.total_cost: float = 0.0
+        self.total_prompt_tokens: int = 0
+        self.total_completion_tokens: int = 0
+        self.total_tokens: int = 0
         self.hallucination_checks: int = 0
         self.hallucination_passes: int = 0
         self.pillar_counts: dict[str, int] = {"HEALTH": 0, "FINANCE": 0, "CAREER": 0}
@@ -222,10 +225,16 @@ class MetricsCollector:
         age_band: str,
         cost: float = 0.0,
         hallucination_passed: bool = True,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
     ) -> None:
         self.total_sessions += 1
         self.total_latency_ms += latency_ms
         self.total_cost += cost
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        self.total_tokens += total_tokens or (prompt_tokens + completion_tokens)
         self.hallucination_checks += 1
         if hallucination_passed:
             self.hallucination_passes += 1
@@ -249,10 +258,17 @@ class MetricsCollector:
         total_decisions = self.approvals + self.rejections
         approval_rate = self.approvals / max(total_decisions, 1)
 
+        avg_tokens = self.total_tokens / max(self.total_sessions, 1)
+
         return {
             "total_sessions": self.total_sessions,
             "avg_latency_ms": round(avg_latency, 1),
-            "avg_cost_per_session": round(avg_cost, 4),
+            "avg_cost_per_session": round(avg_cost, 5),
+            "total_cost_usd": round(self.total_cost, 4),
+            "total_tokens": self.total_tokens,
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_completion_tokens": self.total_completion_tokens,
+            "avg_tokens_per_session": round(avg_tokens, 0),
             "hallucination_rate": round(hall_rate, 4),
             "pillar_split": self.pillar_counts,
             "age_band_split": self.age_band_counts,

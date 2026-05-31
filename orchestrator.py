@@ -12,6 +12,7 @@ import time
 from typing import Any, Optional
 
 from observability import observe, TraceContext, metrics
+from usage import start_usage, get_usage
 from validators import run_all_validations, SAFE_FALLBACK
 from memory import get_user_memory_context, ShortTermMemory
 from cache import get_cached_response, set_cached_response
@@ -53,6 +54,42 @@ SUB_AGENTS = {
     "FINANCE": finance_agent,
     "CAREER": career_agent,
 }
+
+
+# Markers that signal a genuinely complex/nuanced situation worth the costlier
+# reasoning model. Simple factual lookups stay on the cheap fast model.
+_COMPLEX_MARKERS = (
+    "should i", "which is better", "compare", " vs ", "interact", "along with",
+    "because", "diagnos", "pregnan", "medication", "medicine", "side effect",
+    "risk", "multiple", "both", "confused", "worried", "scared", "afraid",
+    "but i", "however", "trade-off", "tradeoff", "pros and cons",
+)
+_HEALTH_SENSITIVE = (
+    "medicine", "medication", "dose", "pregnan", "symptom", "pain", "disease",
+    "diagnos", "bp", "blood pressure", "diabetes", "thyroid", "cancer", "tumor",
+)
+
+
+def choose_answer_tier(query: str, qa_pairs: list[dict], pillar: str) -> str:
+    """Pick 'fast' (DeepSeek Flash) for simple queries and 'reasoning'
+    (DeepSeek Pro, thinking) for complex/sensitive ones — minimising cost
+    without sacrificing quality on the hard cases."""
+    parts = [query or ""]
+    for p in (qa_pairs or []):
+        a = (p.get("a") or "").strip()
+        if a and a.lower() not in ("skip", "skipped", "-"):
+            parts.append(a)
+    text = " ".join(parts).lower()
+
+    # Substantive, multi-factor situations → reasoning
+    if len(text) > 320:
+        return "reasoning"
+    if sum(1 for m in _COMPLEX_MARKERS if m in text) >= 2:
+        return "reasoning"
+    # Health questions touching meds/symptoms/conditions → reasoning (safety)
+    if (pillar or "").upper() == "HEALTH" and any(m in text for m in _HEALTH_SENSITIVE):
+        return "reasoning"
+    return "fast"
 
 
 # ═══════════════════════════════════════════════════════
@@ -133,6 +170,7 @@ async def route_to_agent(
     user_memory_context: str,
     session_id: str,
     user_id: str = "",
+    answer_tier: str = "reasoning",
 ) -> dict[str, Any]:
     """Route to the corresponding sub-agent."""
     agent = SUB_AGENTS.get(intent)
@@ -146,6 +184,7 @@ async def route_to_agent(
         user_memory_context=user_memory_context,
         session_id=session_id,
         user_id=user_id,
+        answer_tier=answer_tier,
     )
     return result
 
@@ -190,17 +229,25 @@ async def process_query(
     """
     start_time = time.time()
 
+    # Begin per-request token + cost accounting
+    start_usage()
+
     # ── SAFETY GATE: crisis detection runs BEFORE everything else ──
     # Never run a clarifying checklist on someone in danger.
     try:
         from safety import detect_crisis
         crisis = await detect_crisis(query)
         if crisis:
+            crisis_usage = get_usage()
             metrics.record_session(
                 latency_ms=(time.time() - start_time) * 1000,
                 pillar="SAFETY",
                 age_band=age_band,
                 hallucination_passed=True,
+                cost=crisis_usage.get("cost_usd", 0.0),
+                prompt_tokens=crisis_usage.get("prompt_tokens", 0),
+                completion_tokens=crisis_usage.get("completion_tokens", 0),
+                total_tokens=crisis_usage.get("total_tokens", 0),
             )
             return {
                 **crisis,
@@ -208,6 +255,7 @@ async def process_query(
                 "sub_agent": "SAFETY",
                 "age_band": age_band,
                 "latency_ms": round((time.time() - start_time) * 1000, 1),
+                "usage": crisis_usage,
                 "steps": [{"step": "safety", "detail": "Crisis support surfaced"}],
             }
     except Exception as e:
@@ -483,7 +531,14 @@ async def _generate_full_answer(
     cached = await get_cached_response(enriched_query, age_band, intent)
     if cached:
         latency_ms = (time.time() - start_time) * 1000
-        metrics.record_session(latency_ms, intent, age_band, cost=0.0)
+        cache_usage = get_usage()
+        metrics.record_session(
+            latency_ms, intent, age_band,
+            cost=cache_usage.get("cost_usd", 0.0),
+            prompt_tokens=cache_usage.get("prompt_tokens", 0),
+            completion_tokens=cache_usage.get("completion_tokens", 0),
+            total_tokens=cache_usage.get("total_tokens", 0),
+        )
         prior_state = await _get_session_state(session_id)
         await _set_session_state(session_id, {
             **prior_state,
@@ -492,13 +547,14 @@ async def _generate_full_answer(
             "last_query": prior_state.get("original_query") or query,
             "last_answer_preview": (cached.get("response") or "")[:600],
         })
-        return {**cached, "from_cache": True, "latency_ms": round(latency_ms, 1), "type": "answer"}
+        return {**cached, "from_cache": True, "latency_ms": round(latency_ms, 1), "type": "answer", "usage": cache_usage}
 
     # Step 2: Get memory context
     steps.append({"step": "memory", "detail": "Loading user context..."})
     memory_context = await get_user_memory_context(user_id, query)
 
     # Step 3: Route to sub-agent with enriched query
+    answer_tier = choose_answer_tier(query, qa_pairs, intent)
     steps.append({"step": "routing", "detail": f"Retrieving {intent.lower()} docs for {age_band}..."})
     agent_result = await route_to_agent(
         query=enriched_query,
@@ -507,6 +563,7 @@ async def _generate_full_answer(
         user_memory_context=memory_context,
         session_id=session_id,
         user_id=user_id,
+        answer_tier=answer_tier,
     )
 
     response_text = agent_result.get("response", "")
@@ -580,14 +637,20 @@ async def _generate_full_answer(
         "steps": steps,
         "clarifying_qa": qa_pairs,
         "response_diagnostics": diagnostics,
+        "usage": get_usage(),
     }
 
-    # Record metrics
+    # Record metrics (with token + cost accounting)
+    turn_usage = result["usage"]
     metrics.record_session(
         latency_ms=latency_ms,
         pillar=intent,
         age_band=age_band,
         hallucination_passed=hallucination_passed,
+        cost=turn_usage.get("cost_usd", 0.0),
+        prompt_tokens=turn_usage.get("prompt_tokens", 0),
+        completion_tokens=turn_usage.get("completion_tokens", 0),
+        total_tokens=turn_usage.get("total_tokens", 0),
     )
 
     # Cache the result (without steps/latency for consistency)
@@ -605,12 +668,18 @@ async def _generate_full_answer(
         "last_answer_preview": (response_text or "")[:600],
     })
 
-    # Log trace
+    # Log trace (with token usage + cost so Langfuse shows real numbers)
     trace.add_generation(
         name=f"{intent.lower()}_response",
         model=agent_result.get("model_used", DEFAULT_MODEL),
         input_text=enriched_query,
         output_text=response_text,
+        usage={
+            "input": turn_usage.get("prompt_tokens", 0),
+            "output": turn_usage.get("completion_tokens", 0),
+            "total": turn_usage.get("total_tokens", 0),
+            "unit": "TOKENS",
+        },
         metadata={
             "age_band": age_band,
             "pillar": intent,
@@ -618,6 +687,9 @@ async def _generate_full_answer(
             "hallucination_check_passed": hallucination_passed,
             "latency_ms": round(latency_ms, 1),
             "clarifying_qa_count": len(qa_pairs),
+            "cost_usd": round(turn_usage.get("cost_usd", 0.0), 6),
+            "llm_calls": turn_usage.get("calls", 0),
+            "tokens_by_model": turn_usage.get("by_model", {}),
         },
     )
     trace_url = trace.finalize()

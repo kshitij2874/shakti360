@@ -48,6 +48,7 @@ async def build_full_response(
     fallback_system_prompt: str = "",
     model_name: Optional[str] = None,
     language: str = "English",
+    answer_tier: str = "reasoning",
 ) -> dict[str, Any]:
     """
     Build a complete structured response with no-truncation guarantees.
@@ -77,6 +78,7 @@ async def build_full_response(
         model_name=model_name,
         language=language,
         diagnostics=diagnostics,
+        answer_tier=answer_tier,
     )
 
     # ── Pass 2: Citations (deterministic) ──
@@ -129,6 +131,7 @@ async def _generate_answer_text(
     model_name: Optional[str],
     diagnostics: dict,
     language: str = "English",
+    answer_tier: str = "reasoning",
 ) -> str:
     """Generate the answer body. Retries up to 3x with larger token budget on truncation."""
     rag_context = _format_rag_context(rag_chunks)
@@ -159,7 +162,7 @@ async def _generate_answer_text(
                 temperature=0.7,
                 top_p=0.9,
                 model_name=model_name,
-                tier="reasoning",  # main answer = difficult task → stronger model
+                tier=answer_tier,  # chosen per-query: fast for simple, reasoning for complex
             )
             text = (text or "").strip()
 

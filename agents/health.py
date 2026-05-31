@@ -47,6 +47,7 @@ async def run(
     user_memory_context: str = "",
     session_id: str = "",
     user_id: str = "",
+    answer_tier: str = "reasoning",
 ) -> dict[str, Any]:
     """
     Execute the health agent.
@@ -83,6 +84,7 @@ async def run(
         fallback_system_prompt=SYSTEM_PROMPT,
         model_name=(model_name if model_name != "medgemma" else DEFAULT_MODEL),
         language=profile.get("language", "English"),
+        answer_tier=answer_tier,
     )
 
     response_text = structured["answer"]

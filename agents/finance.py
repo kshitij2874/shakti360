@@ -37,6 +37,7 @@ async def run(
     user_memory_context: str = "",
     session_id: str = "",
     user_id: str = "",
+    answer_tier: str = "reasoning",
 ) -> dict[str, Any]:
     """
     Execute the finance agent.
@@ -72,6 +73,7 @@ async def run(
         fallback_system_prompt=SYSTEM_PROMPT,
         model_name=DEFAULT_MODEL,
         language=profile.get("language", "English"),
+        answer_tier=answer_tier,
     )
 
     response_text = structured["answer"]
