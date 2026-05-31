@@ -906,63 +906,93 @@ async def _stream_answer(user_id, age_band, query, pillar, qa_pairs, session_id,
         full += delta
         yield {"event": "token", "data": {"t": delta}}
 
-    citation_chips = rb._extract_citations(rag_chunks)
-    citations = []
-    for chunk in rag_chunks:
-        sref = chunk.get("source_ref", "")
-        if sref and sref not in citations:
-            citations.append(sref)
-    try:
-        next_steps = await next_steps_task
-    except Exception:
-        next_steps = rb._fallback_next_steps(intent)
+    # If streaming produced nothing (e.g. model returned empty / stream broke
+    # before any token), retry once non-streamed so we never emit a blank answer.
+    full = (full or "").strip()
+    if not full:
+        try:
+            from llm import call_llm
+            full = (await call_llm(prompt, max_tokens=rb.TOKEN_BUDGETS["answer"],
+                                   temperature=0.7, top_p=0.9, tier=answer_tier)).strip()
+        except Exception as e:
+            logger.warning(f"Stream empty + non-stream retry failed: {e}")
+        if not full:
+            full = ("I'm sorry — I had trouble putting that together just now. "
+                    "Could you try asking again in a moment?")
 
-    validation = await run_all_validations(response_text=full, rag_sources=rag_chunks,
-                                           age_band=age_band, pillar=intent)
     latency_ms = (time.time() - start_time) * 1000
     usage = get_usage()
 
+    # Build the result with safe defaults; enrich best-effort so a failure in
+    # any post-stream step never aborts the turn (which would wipe the answer).
     result = {
         "type": "answer", "response": full, "sub_agent": intent, "pillar": intent,
-        "age_band": age_band, "citations": citations, "citation_chips": citation_chips,
-        "next_steps": next_steps, "tools_to_call": [], "awaiting_approval": False,
-        "session_id": session_id,
-        "validation": {
+        "age_band": age_band, "citations": [], "citation_chips": [],
+        "next_steps": rb._fallback_next_steps(intent), "tools_to_call": [], "awaiting_approval": False,
+        "session_id": session_id, "validation": {"all_passed": True},
+        "latency_ms": round(latency_ms, 1), "from_cache": False,
+        "clarifying_qa": qa_pairs, "usage": usage,
+    }
+    try:
+        result["citation_chips"] = rb._extract_citations(rag_chunks)
+        result["citations"] = []
+        for chunk in rag_chunks:
+            sref = chunk.get("source_ref", "")
+            if sref and sref not in result["citations"]:
+                result["citations"].append(sref)
+    except Exception as e:
+        logger.warning(f"citations build failed (stream): {e}")
+    try:
+        result["next_steps"] = await next_steps_task
+    except Exception:
+        pass
+    try:
+        validation = await run_all_validations(response_text=full, rag_sources=rag_chunks,
+                                               age_band=age_band, pillar=intent)
+        result["validation"] = {
             "all_passed": validation["all_passed"],
             "citation_check": validation["citation_check"]["passed"],
             "age_check": validation["age_appropriateness_check"]["passed"],
             "safety_check": validation["domain_safety_check"]["passed"],
-        },
-        "latency_ms": round(latency_ms, 1), "from_cache": False,
-        "clarifying_qa": qa_pairs, "usage": usage,
-    }
+        }
+    except Exception as e:
+        logger.warning(f"validation failed (stream): {e}")
 
-    metrics.record_session(latency_ms=latency_ms, pillar=intent, age_band=age_band,
-                           hallucination_passed=validation["all_passed"],
-                           cost=usage.get("cost_usd", 0.0),
-                           prompt_tokens=usage.get("prompt_tokens", 0),
-                           completion_tokens=usage.get("completion_tokens", 0),
-                           total_tokens=usage.get("total_tokens", 0))
-
-    cache_data = {k: v for k, v in result.items() if k not in ("latency_ms", "from_cache", "usage")}
-    await set_cached_response(enriched_query, age_band, intent, cache_data)
-
-    prior_state = await _get_session_state(session_id)
-    await _set_session_state(session_id, {**prior_state, "phase": "done", "last_pillar": intent,
-                                          "last_query": prior_state.get("original_query") or query,
-                                          "last_answer_preview": (full or "")[:600]})
-
-    trace.add_generation(name=f"{intent.lower()}_response_stream", model=DEFAULT_MODEL,
-                         input_text=enriched_query, output_text=full,
-                         usage={"input": usage.get("prompt_tokens", 0), "output": usage.get("completion_tokens", 0),
-                                "total": usage.get("total_tokens", 0), "unit": "TOKENS"},
-                         metadata={"age_band": age_band, "pillar": intent, "cost_usd": round(usage.get("cost_usd", 0.0), 6),
-                                   "streamed": True})
-    trace_url = trace.finalize()
-    if trace_url:
-        result["trace_url"] = trace_url
-
+    # Emit the answer to the user FIRST, then do persistence best-effort.
     yield {"event": "final", "data": result}
+
+    try:
+        metrics.record_session(latency_ms=latency_ms, pillar=intent, age_band=age_band,
+                               hallucination_passed=result["validation"].get("all_passed", True),
+                               cost=usage.get("cost_usd", 0.0),
+                               prompt_tokens=usage.get("prompt_tokens", 0),
+                               completion_tokens=usage.get("completion_tokens", 0),
+                               total_tokens=usage.get("total_tokens", 0))
+    except Exception as e:
+        logger.warning(f"metrics record failed (stream): {e}")
+    try:
+        cache_data = {k: v for k, v in result.items()
+                      if k not in ("latency_ms", "from_cache", "usage", "trace_url")}
+        await set_cached_response(enriched_query, age_band, intent, cache_data)
+    except Exception as e:
+        logger.warning(f"cache write failed (stream): {e}")
+    try:
+        prior_state = await _get_session_state(session_id)
+        await _set_session_state(session_id, {**prior_state, "phase": "done", "last_pillar": intent,
+                                              "last_query": prior_state.get("original_query") or query,
+                                              "last_answer_preview": full[:600]})
+    except Exception as e:
+        logger.warning(f"state update failed (stream): {e}")
+    try:
+        trace.add_generation(name=f"{intent.lower()}_response_stream", model=DEFAULT_MODEL,
+                             input_text=enriched_query, output_text=full,
+                             usage={"input": usage.get("prompt_tokens", 0), "output": usage.get("completion_tokens", 0),
+                                    "total": usage.get("total_tokens", 0), "unit": "TOKENS"},
+                             metadata={"age_band": age_band, "pillar": intent,
+                                       "cost_usd": round(usage.get("cost_usd", 0.0), 6), "streamed": True})
+        trace.finalize()
+    except Exception as e:
+        logger.warning(f"trace log failed (stream): {e}")
 
 
 async def _gather3(a, b, c):

@@ -1620,15 +1620,26 @@ function ChatView({ idToken, user, onResetOnboarding }) {
         gotFinal = true;
         setThinkingSteps([]);
         if (gotMeta) {
-          setMessages(prev => prev.map(m => m._streamId === streamId
-            ? { ...assistantMsgFromData(data), _streamId: streamId, _streaming: false,
-                content: (data.response ?? m.content) }
-            : m));
+          setMessages(prev => prev.map(m => {
+            if (m._streamId !== streamId) return m;
+            const merged = { ...assistantMsgFromData(data), _streamId: streamId, _streaming: false };
+            // Never blank out a streamed answer if final.response is empty
+            const finalText = (data.response || '').trim();
+            merged.content = finalText ? data.response : (m.content || '');
+            return merged;
+          }));
         } else {
           setMessages(prev => [...prev, assistantMsgFromData(data)]);
         }
       } else if (ev === 'error') {
-        throw new Error(data.detail || 'stream error');
+        // If we already streamed text, keep it — don't wipe a good answer.
+        if (gotToken) {
+          gotFinal = true;
+          setThinkingSteps([]);
+          setMessages(prev => prev.map(m => m._streamId === streamId ? { ...m, _streaming:false } : m));
+        } else {
+          throw new Error(data.detail || 'stream error');
+        }
       }
     };
 
